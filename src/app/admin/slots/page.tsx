@@ -60,7 +60,6 @@ export default function ManageSlotsPage() {
 
   const fetchDoctors = useCallback(async () => {
     try {
-      // Fetching all doctors now, as specialization was removed from doctor entity
       const doctorsSnapshot = await getDocs(firestoreQuery(collection(db, "doctors"), orderBy("name")));
       const fetchedDoctors: DoctorOption[] = [];
       doctorsSnapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, name: doc.data().name }));
@@ -88,7 +87,12 @@ export default function ManageSlotsPage() {
       setSlotConfigs(fetchedConfigs);
     } catch (error) {
       console.error("Error fetching slot configurations: ", error);
-      toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations." });
+      // Do not toast if it's an index error, as Firebase console provides a link
+      if (!(error instanceof Error && error.message.includes("firestore/failed-precondition"))) {
+        toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations." });
+      } else {
+        console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message.");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -99,13 +103,15 @@ export default function ManageSlotsPage() {
   }, [fetchDoctors]);
 
   useEffect(() => {
-    if (doctors.length > 0) { // Fetch slots only after doctors are loaded
+    if (doctors.length > 0) { 
         fetchSlotConfigs();
-    } else if (!isLoading && doctors.length === 0) { // If loading done and no doctors
-        setIsLoading(false); // Ensure loading is false if no doctors to fetch slots for
+    } else {
+        // If doctors array is empty (either initially or after fetchDoctors found none),
+        // ensure slots are cleared and loading is set to false.
         setSlotConfigs([]);
+        setIsLoading(false); 
     }
-  }, [doctors, fetchSlotConfigs, isLoading]);
+  }, [doctors, fetchSlotConfigs]);
 
 
   const handleDialogOpen = (slotConfig?: SlotConfig) => {
@@ -130,7 +136,7 @@ export default function ManageSlotsPage() {
         await addDoc(collection(db, "slotConfigurations"), { ...values, createdAt: serverTimestamp() });
         toast({ title: "Slot Configuration Added" });
       }
-      fetchSlotConfigs();
+      fetchSlotConfigs(); // Re-fetch to update the list, will use the new index if created
       setIsDialogOpen(false);
       form.reset();
     } catch (error: any) {
@@ -146,14 +152,14 @@ export default function ManageSlotsPage() {
     try {
         await deleteDoc(doc(db, "slotConfigurations", slotConfigId));
         toast({ title: "Slot Configuration Deleted", variant: "destructive" });
-        fetchSlotConfigs();
+        fetchSlotConfigs(); // Re-fetch
     } catch (error: any) {
         console.error("Error deleting slot config:", error);
         toast({variant: "destructive", title: "Delete Error", description: error.message || "Could not delete slot configuration."})
     }
   };
 
-  if (isLoading && doctors.length === 0) { // Initial loading for doctors
+  if (isLoading && doctors.length === 0) { 
     return (
       <div className="flex items-center justify-center h-full">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -183,7 +189,7 @@ export default function ManageSlotsPage() {
           <CardDescription>List of defined availability schedules for doctors.</CardDescription>
         </CardHeader>
         <CardContent>
-          {isLoading && slotConfigs.length === 0 ? (
+          {isLoading ? ( // Simplified loading check here for slot configs specifically
              <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
                 <p className="ml-2">Loading configurations...</p>
@@ -192,6 +198,7 @@ export default function ManageSlotsPage() {
              <div className="text-center py-8 text-muted-foreground">
                 <CalendarClock className="mx-auto h-12 w-12 mb-4"/>
                 <p>No slot configurations found. Add one to define doctor availability.</p>
+                <p className="text-xs mt-1">If you just created an index in Firestore, it might take a moment to activate.</p>
             </div>
           ) : (
           <Table>
@@ -331,4 +338,3 @@ export default function ManageSlotsPage() {
     </div>
   );
 }
-
