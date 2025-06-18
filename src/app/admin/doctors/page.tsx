@@ -19,23 +19,22 @@ import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimes
 const generateTimeSlots = (startHour: number, endHour: number, intervalMinutes: number): { id: string, label: string }[] => {
   const slots = [];
   const startTime = new Date();
-  startTime.setHours(startHour, 0, 0, 0); // Start at 9:00 AM
+  startTime.setHours(startHour, 0, 0, 0); 
 
   const endTime = new Date();
-  endTime.setHours(endHour, 0, 0, 0); // End at 6:00 PM (exclusive for last slot generation)
+  endTime.setHours(endHour, 0, 0, 0); 
 
   let currentTime = new Date(startTime);
 
-  // Loop until current time reaches or exceeds 5:45 PM for 6 PM end
   while (currentTime.getHours() < endHour || (currentTime.getHours() === endHour -1 && currentTime.getMinutes() < (60-intervalMinutes+1)) ) {
-    if(currentTime.getHours() >= endHour && currentTime.getMinutes() > 0) break; // Ensure we don't go past 6PM
+    if(currentTime.getHours() >= endHour && currentTime.getMinutes() > 0) break; 
 
     const hours = currentTime.getHours().toString().padStart(2, '0');
     const minutes = currentTime.getMinutes().toString().padStart(2, '0');
     const timeString = `${hours}:${minutes}`;
     slots.push({ id: timeString, label: timeString });
     currentTime.setMinutes(currentTime.getMinutes() + intervalMinutes);
-    if(currentTime.getHours() === endHour && currentTime.getMinutes() === 0) break; // Stop exactly if 6:00 PM is reached by an interval
+    if(currentTime.getHours() === endHour && currentTime.getMinutes() === 0) break; 
   }
   return slots;
 };
@@ -55,7 +54,7 @@ type DoctorFormValues = z.infer<typeof doctorFormSchema>;
 
 interface Doctor extends DoctorFormValues {
   id: string;
-  createdAt?: any; // Firestore Timestamp
+  createdAt?: any; 
 }
 
 export default function ManageDoctorsPage() {
@@ -97,7 +96,12 @@ export default function ManageDoctorsPage() {
   const handleDialogOpen = (doctor?: Doctor) => {
     if (doctor) {
       setEditingDoctor(doctor);
-      form.reset({...doctor, availabilitySlots: doctor.availabilitySlots || []});
+      form.reset({
+        ...doctor,
+        experience: doctor.experience ?? 0,
+        phoneNumber: doctor.phoneNumber ?? "",
+        availabilitySlots: doctor.availabilitySlots || []
+      });
     } else {
       setEditingDoctor(null);
       form.reset({ name: "", email: "", experience: 0, phoneNumber: "", availabilitySlots: [] });
@@ -107,7 +111,6 @@ export default function ManageDoctorsPage() {
 
   const onSubmit = async (values: DoctorFormValues) => {
     setIsSubmitting(true);
-    // Removed specialization from doctorData
     const doctorData = { ...values };
     try {
       if (editingDoctor) {
@@ -327,3 +330,4 @@ export default function ManageDoctorsPage() {
     </div>
   );
 }
+
