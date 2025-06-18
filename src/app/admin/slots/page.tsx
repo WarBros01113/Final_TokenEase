@@ -49,7 +49,7 @@ interface DoctorOption {
 
 interface SlotConfig extends Omit<SlotFormValues, 'dayOfWeek'> {
   id: string;
-  dayOfWeek: string[]; 
+  dayOfWeek: string[];
   doctorName?: string;
   createdAt?: any;
 }
@@ -72,7 +72,6 @@ export default function ManageSlotsPage() {
   const fetchDoctors = useCallback(async () => {
     setIsLoadingDoctors(true);
     try {
-      // Fetch all doctors, ordered by name. No specialization filter needed.
       const doctorsSnapshot = await getDocs(firestoreQuery(collection(db, "doctors"), orderBy("name")));
       const fetchedDoctors: DoctorOption[] = [];
       doctorsSnapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, name: doc.data().name }));
@@ -93,7 +92,6 @@ export default function ManageSlotsPage() {
     }
     setIsSlotConfigLoading(true);
     try {
-      // Order by doctorId, then by startTime. dayOfWeek is an array and cannot be directly ordered easily in Firestore for complex queries.
       const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId", "asc"), orderBy("startTime", "asc")));
       const fetchedConfigs: SlotConfig[] = [];
       const doctorNameMap = new Map(doctors.map(d => [d.id, d.name]));
@@ -102,7 +100,7 @@ export default function ManageSlotsPage() {
         fetchedConfigs.push({
             id: docSnap.id,
             ...data,
-            dayOfWeek: Array.isArray(data.dayOfWeek) ? data.dayOfWeek : (typeof data.dayOfWeek === 'string' ? [data.dayOfWeek] : []), 
+            dayOfWeek: Array.isArray(data.dayOfWeek) ? data.dayOfWeek : (typeof data.dayOfWeek === 'string' ? [data.dayOfWeek] : []),
             doctorName: doctorNameMap.get(data.doctorId) || data.doctorId
         } as SlotConfig);
       });
@@ -129,7 +127,7 @@ export default function ManageSlotsPage() {
         fetchSlotConfigs();
     } else if (!isLoadingDoctors && doctors.length === 0) {
         setSlotConfigs([]);
-        setIsSlotConfigLoading(false);
+        // setIsSlotConfigLoading(false); // This was already being set in fetchSlotConfigs, avoid potential conflicts
     }
   }, [doctors, fetchSlotConfigs, isLoadingDoctors]);
 
@@ -170,15 +168,25 @@ export default function ManageSlotsPage() {
     }
   };
 
-  const handleDeleteSlotConfig = async (slotConfigId: string) => {
-    if (!window.confirm("Are you sure you want to delete this slot configuration?")) return;
+  const handleDeleteSlotConfig = async (slotConfigId: string, doctorName?: string) => {
+    const confirmMessage = doctorName
+      ? `Are you sure you want to delete this slot configuration for Dr. ${doctorName}?`
+      : "Are you sure you want to delete this slot configuration?";
+
+    if (!window.confirm(confirmMessage)) {
+      console.log("Deletion cancelled by user for slotConfigId:", slotConfigId);
+      return;
+    }
+
+    console.log("Attempting to delete slotConfigId:", slotConfigId, "for doctor:", doctorName || "Unknown");
     try {
         await deleteDoc(doc(db, "slotConfigurations", slotConfigId));
-        toast({ title: "Slot Configuration Deleted", variant: "destructive" });
+        toast({ title: "Slot Configuration Deleted", description: `Slot for ${doctorName || 'selected doctor'} removed.`, variant: "default" });
+        console.log("Successfully deleted slotConfigId:", slotConfigId);
         fetchSlotConfigs(); // Refresh list
     } catch (error: any) {
-        console.error("Error deleting slot config:", error);
-        toast({variant: "destructive", title: "Delete Error", description: error.message || "Could not delete slot configuration."})
+        console.error("Error deleting slot config (slotConfigId:", slotConfigId, "): ", error);
+        toast({variant: "destructive", title: "Delete Error", description: `Could not delete slot configuration: ${error.message || 'Unknown error'}. Check console for details.`})
     }
   };
 
@@ -247,7 +255,7 @@ export default function ManageSlotsPage() {
                     <Button variant="ghost" size="icon" onClick={() => handleDialogOpen(sc)}>
                       <Edit className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive/80" onClick={() => handleDeleteSlotConfig(sc.id)}>
+                    <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive/80" onClick={() => handleDeleteSlotConfig(sc.id, sc.doctorName)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </TableCell>
@@ -288,7 +296,7 @@ export default function ManageSlotsPage() {
               <FormField
                 control={form.control}
                 name="dayOfWeek"
-                render={() => (
+                render={({ field }) => ( // Pass field here for Checkbox group
                   <FormItem>
                     <div className="mb-2">
                       <FormLabel className="text-base flex items-center"><CalendarDays className="mr-2 h-4 w-4"/>Days of Week</FormLabel>
@@ -301,8 +309,8 @@ export default function ManageSlotsPage() {
                         <FormField
                           key={day.id}
                           control={form.control}
-                          name="dayOfWeek"
-                          render={({ field }) => {
+                          name="dayOfWeek" // Individual Checkbox also needs to be part of the form field array
+                          render={({ field: checkboxField }) => { // field specific to this checkbox instance
                             return (
                               <FormItem
                                 key={day.id}
@@ -310,12 +318,13 @@ export default function ManageSlotsPage() {
                               >
                                 <FormControl>
                                   <Checkbox
-                                    checked={field.value?.includes(day.id)}
+                                    checked={checkboxField.value?.includes(day.id)}
                                     onCheckedChange={(checked) => {
+                                      const currentValue = checkboxField.value || [];
                                       return checked
-                                        ? field.onChange([...(field.value || []), day.id])
-                                        : field.onChange(
-                                            (field.value || []).filter(
+                                        ? checkboxField.onChange([...currentValue, day.id])
+                                        : checkboxField.onChange(
+                                            currentValue.filter(
                                               (value) => value !== day.id
                                             )
                                           );
@@ -395,3 +404,5 @@ export default function ManageSlotsPage() {
     </div>
   );
 }
+
+    
