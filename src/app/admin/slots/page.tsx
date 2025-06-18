@@ -40,7 +40,7 @@ const daysOfWeekOptions = [
 const generateTimeSlotCheckboxOptions = () => {
   const options = [];
   const startHour = 9;
-  const endHour = 18; // Up to 17:45 (ends at 18:00)
+  const endHour = 18; // Slots up to 17:45 (ends before 18:00)
 
   for (let hour = startHour; hour < endHour; hour++) {
     for (let minute = 0; minute < 60; minute += 15) {
@@ -69,9 +69,9 @@ interface DoctorOption {
 }
 
 interface SlotConfig extends SlotFormValues {
-  id: string;
+  id: string; // This is the document ID from Firestore
   doctorName?: string;
-  createdAt?: any;
+  createdAt?: any; // Keep if you use it, though not in form schema
 }
 
 export default function ManageSlotsPage() {
@@ -115,27 +115,42 @@ export default function ManageSlotsPage() {
         setIsSlotConfigLoading(false);
         return;
     }
-    if(doctors.length > 0) { 
+    if(doctors.length > 0) {
         setIsSlotConfigLoading(true);
         try {
-          // Changed orderBy: startTime removed, dayOfWeek added
           const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId", "asc"), orderBy("dayOfWeek", "asc")));
-          const fetchedConfigs: SlotConfig[] = [];
+          const newConfigs: SlotConfig[] = [];
           const doctorNameMap = new Map(doctors.map(d => [d.id, d.name]));
+
           slotsSnapshot.forEach(docSnap => {
             const data = docSnap.data();
-            fetchedConfigs.push({
+            let dayOfWeekValue: string = "Monday"; // Default
+
+            if (typeof data.dayOfWeek === 'string' && data.dayOfWeek) {
+                dayOfWeekValue = data.dayOfWeek;
+            } else if (Array.isArray(data.dayOfWeek) && data.dayOfWeek.length > 0 && typeof data.dayOfWeek[0] === 'string') {
+                // Handle legacy array data: use the first day.
+                dayOfWeekValue = data.dayOfWeek[0];
+                console.warn(`Slot config ${docSnap.id} uses legacy array for dayOfWeek. Using first day: ${dayOfWeekValue}`);
+            } else if (data.dayOfWeek) { // If it exists but isn't a string or valid array
+                 console.warn(`Slot config ${docSnap.id} has an invalid dayOfWeek format: ${typeof data.dayOfWeek}. Defaulting to Monday.`);
+            }
+            
+            newConfigs.push({
                 id: docSnap.id,
-                ...data,
+                doctorId: data.doctorId,
+                dayOfWeek: dayOfWeekValue, // Ensured string
                 selectedSlots: Array.isArray(data.selectedSlots) ? data.selectedSlots : [],
-                doctorName: doctorNameMap.get(data.doctorId) || data.doctorId
-            } as SlotConfig);
+                capacityPerSlot: typeof data.capacityPerSlot === 'number' ? data.capacityPerSlot : 1,
+                doctorName: doctorNameMap.get(data.doctorId) || data.doctorId,
+                // createdAt field is not part of SlotFormValues, so not strictly needed for form reset
+                // but can be kept on SlotConfig if used elsewhere.
+                // createdAt: data.createdAt, 
+            });
           });
-          setSlotConfigs(fetchedConfigs);
+          setSlotConfigs(newConfigs);
         } catch (error: any) {
           console.error("Error fetching slot configurations: ", error);
-          // Generic error toast, specific index toast removed as index requirement changed.
-          // Firebase console will prompt for new index: collection 'slotConfigurations', fields: 'doctorId' (Ascending), 'dayOfWeek' (Ascending).
           toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations. A new Firestore index might be required. Check console for details.", duration: 10000 });
           if (error.message && error.message.includes("firestore/failed-precondition")) {
             console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message or create it manually: collection 'slotConfigurations', fields: 'doctorId' (Ascending), 'dayOfWeek' (Ascending).");
@@ -151,8 +166,11 @@ export default function ManageSlotsPage() {
   }, [fetchDoctors]);
 
   useEffect(() => {
-    if (!isLoadingDoctors) {
+    if (!isLoadingDoctors && doctors.length > 0) { // Fetch configs only if doctors are loaded and available
         fetchSlotConfigs();
+    } else if (!isLoadingDoctors && doctors.length === 0) { // No doctors, so no configs to fetch
+        setSlotConfigs([]);
+        setIsSlotConfigLoading(false);
     }
   }, [doctors, isLoadingDoctors, fetchSlotConfigs]);
 
@@ -160,8 +178,10 @@ export default function ManageSlotsPage() {
   const handleFormDialogOpen = (slotConfig?: SlotConfig) => {
     if (slotConfig) {
       setEditingSlotConfig(slotConfig);
+      // Ensure dayOfWeek passed to reset is a string, which should be guaranteed by fetchSlotConfigs
       form.reset({
-        ...slotConfig,
+        ...slotConfig, // Spread existing values
+        dayOfWeek: typeof slotConfig.dayOfWeek === 'string' ? slotConfig.dayOfWeek : "Monday", // Ensure it's a string
         selectedSlots: Array.isArray(slotConfig.selectedSlots) ? slotConfig.selectedSlots : []
       });
     } else {
@@ -182,7 +202,10 @@ export default function ManageSlotsPage() {
         await addDoc(collection(db, "slotConfigurations"), { ...values, createdAt: serverTimestamp() });
         toast({ title: "Slot Configuration Added" });
       }
-      fetchSlotConfigs();
+      // Re-fetch only if doctors are present, otherwise fetchSlotConfigs won't run correctly
+      if (doctors.length > 0) {
+        fetchSlotConfigs();
+      }
       setIsFormDialogOpen(false);
       form.reset();
     } catch (error: any) {
@@ -204,7 +227,11 @@ export default function ManageSlotsPage() {
     try {
         await deleteDoc(doc(db, "slotConfigurations", slotConfigIdToDelete));
         toast({ title: "Slot Configuration Deleted", description: `Slot config for ${slotDoctorNameToDelete || 'selected doctor'} removed.`, variant: "default" });
-        fetchSlotConfigs(); 
+        if (doctors.length > 0) {
+            fetchSlotConfigs(); 
+        } else {
+            setSlotConfigs([]); // Clear configs if no doctors (edge case)
+        }
     } catch (error: any) {
         console.error("Error deleting slot config: ", error);
         toast({variant: "destructive", title: "Delete Error", description: `Could not delete slot configuration: ${error.message || 'Unknown error'}.`})
@@ -274,7 +301,7 @@ export default function ManageSlotsPage() {
                   <TableCell className="font-medium">{sc.doctorName || sc.doctorId}</TableCell>
                   <TableCell>{sc.dayOfWeek}</TableCell>
                   <TableCell>
-                    {sc.selectedSlots.length > 0 ? `${sc.selectedSlots.length} slots selected (e.g., ${sc.selectedSlots[0]})` : 'None'}
+                    {sc.selectedSlots.length > 0 ? `${sc.selectedSlots.length} slots (e.g., ${sc.selectedSlots[0]})` : 'None'}
                   </TableCell>
                   <TableCell>{sc.capacityPerSlot} patients</TableCell>
                   <TableCell className="text-right space-x-2">
@@ -347,7 +374,7 @@ export default function ManageSlotsPage() {
                         Check the boxes for time slots the doctor will be available. (9:00 AM - 5:45 PM)
                       </FormDescription>
                     </div>
-                    <div className="grid grid-cols-4 gap-2 p-2 border rounded-md max-h-60 overflow-y-auto">
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2 border rounded-md max-h-60 overflow-y-auto">
                       {timeSlotCheckboxOptions.map((slot) => (
                         <FormField
                           key={slot.id}
@@ -365,7 +392,7 @@ export default function ManageSlotsPage() {
                                     onCheckedChange={(checked) => {
                                       const currentValue = checkboxField.value || [];
                                       return checked
-                                        ? checkboxField.onChange([...currentValue, slot.id])
+                                        ? checkboxField.onChange([...currentValue, slot.id].sort()) // Keep sorted
                                         : checkboxField.onChange(
                                             currentValue.filter(
                                               (value) => value !== slot.id
@@ -434,5 +461,3 @@ export default function ManageSlotsPage() {
     </div>
   );
 }
-
-    
