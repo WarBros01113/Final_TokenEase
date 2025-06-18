@@ -21,14 +21,14 @@ interface Appointment {
   date: string; 
   time: string; // appointmentTime
   appointmentTimeDisplay: string; // display string for time
-  status: 'upcoming' | 'active' | 'completed' | 'cancelled';
+  status: 'upcoming' | 'active' | 'completed' | 'cancelled' | 'delayed'; // Added 'delayed'
   tokenNumber?: number;
   patientId: string;
   createdAt: Timestamp;
 }
 
 interface TokenInfo {
-  currentServingToken: number; 
+  currentServingToken: number | string; // Can be '-'
   yourToken: number;
   estimatedWaitTime: string; 
   doctorName: string;
@@ -53,23 +53,22 @@ export default function PatientDashboardPage() {
     setIsLoading(true);
     setError(null);
     setUpcomingAppointments([]);
-    setActiveAppointmentForToken(null);
+    setActiveAppointmentForToken(null); 
     try {
       const appointmentsRef = collection(db, "appointments");
       const today = new Date().toISOString().split('T')[0];
 
-      // Fetch upcoming appointments (today or in future)
       const qUpcoming = query(
         appointmentsRef,
         where("patientId", "==", currentUserId),
-        where("status", "in", ["upcoming", "active", "delayed"]),
-        where("date", ">=", today),
+        where("status", "in", ["upcoming", "active", "delayed"]), // Include 'delayed'
+        where("date", ">=", today), // Appointments from today onwards
         orderBy("date", "asc"),
         orderBy("time", "asc")
       );
       const upcomingSnapshot = await getDocs(qUpcoming);
       const fetchedUpcomingAppointments: Appointment[] = [];
-      let foundActiveForToken: Appointment | null = null;
+      let candidateForActiveToken: Appointment | null = null;
 
       upcomingSnapshot.forEach((docSnap) => {
         const data = docSnap.data();
@@ -87,18 +86,31 @@ export default function PatientDashboardPage() {
           createdAt: data.createdAt,
         };
         fetchedUpcomingAppointments.push(appointment);
-        if (data.date === today && (data.status === 'active' || data.status === 'upcoming') && data.tokenNumber) {
-            if (!foundActiveForToken || data.status === 'active' || (data.time < foundActiveForToken.time && foundActiveForToken.status !== 'active')) {
-                foundActiveForToken = appointment;
+
+        // Logic to find the most relevant appointment for token display (today's active, or earliest upcoming with token)
+        if (appointment.date === today && appointment.tokenNumber && (appointment.status === 'active' || appointment.status === 'upcoming' || appointment.status === 'delayed')) {
+            // Prioritize 'active' or 'delayed' appointments
+            if (appointment.status === 'active' || appointment.status === 'delayed') {
+                if (!candidateForActiveToken || 
+                    (candidateForActiveToken.status !== 'active' && candidateForActiveToken.status !== 'delayed') || 
+                    appointment.time < candidateForActiveToken.time) {
+                    candidateForActiveToken = appointment;
+                }
+            } else if (appointment.status === 'upcoming') {
+                // If current candidate is not 'active' or 'delayed', consider 'upcoming'
+                if (!candidateForActiveToken || (candidateForActiveToken.status !== 'active' && candidateForActiveToken.status !== 'delayed' && appointment.time < candidateForActiveToken.time)) {
+                    candidateForActiveToken = appointment;
+                }
             }
         }
       });
+      
       setUpcomingAppointments(fetchedUpcomingAppointments);
-      setActiveAppointmentForToken(foundActiveForToken);
+      setActiveAppointmentForToken(candidateForActiveToken);
 
     } catch (err: any) {
       console.error("Error fetching dashboard data:", err);
-      setError("Failed to load dashboard data.");
+      setError("Failed to load dashboard data. Please try again later.");
     } finally {
       setIsLoading(false);
     }
@@ -109,15 +121,16 @@ export default function PatientDashboardPage() {
       fetchData(user.uid);
     } else if (!authLoading && !user) {
       setIsLoading(false); 
+      setError(null);
       setUpcomingAppointments([]);
       setActiveAppointmentForToken(null);
     }
   }, [user?.uid, authLoading, fetchData]);
 
-  // Listener for live queue status if there's an active/upcoming appointment with a token
   useEffect(() => {
     let unsubscribe: Unsubscribe | null = null;
-    if (activeAppointmentForToken?.doctorId && activeAppointmentForToken.tokenNumber && (activeAppointmentForToken.status === 'active' || activeAppointmentForToken.status === 'upcoming')) {
+    if (activeAppointmentForToken?.doctorId && activeAppointmentForToken.tokenNumber && 
+        (activeAppointmentForToken.status === 'active' || activeAppointmentForToken.status === 'upcoming' || activeAppointmentForToken.status === 'delayed')) {
       const queueDocRef = doc(db, "doctorQueueStatus", activeAppointmentForToken.doctorId);
       unsubscribe = onSnapshot(queueDocRef, (docSnap) => {
         if (docSnap.exists()) {
@@ -172,7 +185,7 @@ export default function PatientDashboardPage() {
     appointmentId: activeAppointmentForToken.id,
     doctorName: activeAppointmentForToken.doctorName,
     yourToken: activeAppointmentForToken.tokenNumber,
-    currentServingToken: liveQueue?.currentServingToken ?? (activeAppointmentForToken.status === 'upcoming' ? '-' : (activeAppointmentForToken.tokenNumber - Math.floor(Math.random()*2+1))),
+    currentServingToken: liveQueue?.currentServingToken ?? (activeAppointmentForToken.status === 'upcoming' ? '-' : (activeAppointmentForToken.tokenNumber - Math.floor(Math.random()*2+1))), // Simplified mock fallback
     estimatedWaitTime: liveQueue?.currentServingToken && activeAppointmentForToken.tokenNumber && liveQueue.currentServingToken >= activeAppointmentForToken.tokenNumber ? "Your turn soon!" : liveQueue?.estimatedWaitTime || "Calculating..."
   } : null;
 
@@ -210,7 +223,7 @@ export default function PatientDashboardPage() {
         </Card>
       )}
 
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-2"> {/* Changed to 2 cols */}
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center"><CalendarCheck className="mr-2 h-5 w-5 text-primary" /> Upcoming Appointments</CardTitle>
@@ -221,7 +234,13 @@ export default function PatientDashboardPage() {
                 {upcomingAppointments.map(appt => (
                   <li key={appt.id} className="p-3 bg-secondary/50 rounded-md shadow-sm">
                     <p className="font-semibold">Dr. {appt.doctorName} <span className="text-sm text-muted-foreground">({appt.specialization})</span></p>
-                    <p className="text-sm">{new Date(appt.date).toLocaleDateString()} at {appt.appointmentTimeDisplay}</p>
+                    <p className="text-sm">{new Date(appt.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })} at {appt.appointmentTimeDisplay}</p>
+                     <p className={`text-xs capitalize font-medium ${
+                        appt.status === 'active' ? 'text-green-600' :
+                        appt.status === 'upcoming' ? 'text-blue-600' :
+                        appt.status === 'delayed' ? 'text-yellow-600' :
+                        'text-muted-foreground'
+                     }`}>Status: {appt.status}</p>
                     <Button variant="link" size="sm" asChild className="p-0 h-auto mt-1">
                       <Link href={`/app/appointments/${appt.id}/status`}>View Details</Link>
                     </Button>
