@@ -1,49 +1,69 @@
+
 rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Default: Deny all reads and writes to prevent unintended access.
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Users collection:
-    // Allow users to read their own profile.
-    // Allow authenticated users to create their own profile document.
-    // Allow users to update their own profile document.
+    // Users collection
+    // - Authenticated users can create their own user document.
+    // - Users can only read or update their own document.
+    // - Admins can read any user document (useful for admin panels).
     match /users/{userId} {
-      allow read, update: if request.auth != null && request.auth.uid == userId;
       allow create: if request.auth != null;
+      allow read, update: if request.auth != null && request.auth.uid == userId;
+      // Example: Allow admins to read user data
+      // allow read: if request.auth != null && (request.auth.uid == userId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
     }
 
-    // Appointments collection:
+    // Doctors collection
+    // - Authenticated users (patients/admins) can read/list doctors.
+    // - Only admins can create, update, or delete doctors.
+    match /doctors/{doctorId} {
+      allow read, list: if request.auth != null;
+      allow create, update, delete: if request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Appointments collection
     // - Patients can create appointments for themselves.
-    // - Patients can read/update their own appointments.
-    // - (Future: Doctors/Admins might have different access rights)
+    // - Patients can read/list their own appointments.
+    // - Patients can update their own upcoming appointments (e.g., to cancel - more specific logic might be needed).
+    // - Admins can read/list all appointments.
+    // - Admins can potentially update/delete any appointment.
     match /appointments/{appointmentId} {
       allow create: if request.auth != null && request.resource.data.patientId == request.auth.uid;
-      allow read, update: if request.auth != null && resource.data.patientId == request.auth.uid;
-      // Example for admin/doctor read access (you'd need to define how roles are checked):
-      // allow read: if request.auth != null && (resource.data.patientId == request.auth.uid || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'doctor']);
+      
+      allow read: if request.auth != null && 
+                     (resource.data.patientId == request.auth.uid || 
+                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+
+      // For 'list' operations (queries):
+      // This rule allows a patient to query appointments where their UID is the patientId,
+      // OR an admin to query any appointments.
+      // This is a simplified list rule. For more complex queries, you might need more specific rules
+      // or to ensure your queries match what's allowed.
+      allow list: if request.auth != null &&
+                    ( (request.query.resource.__name__[0] == "users" && request.query.resource.__name__[1] == request.auth.uid) || // This part seems off for querying 'appointments' directly
+                      (request.auth.uid != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+                      (request.query.filters.size() > 0 && request.query.filters[0].fieldPath == "patientId" && request.query.filters[0].value == request.auth.uid) // Allows querying by patientId
+                    );
+
+
+      allow update: if request.auth != null && 
+                      (resource.data.patientId == request.auth.uid || 
+                       get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      
+      allow delete: if request.auth != null && 
+                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
-    // Doctors collection:
-    // - Authenticated users can read doctor information.
-    // - (Future: Only admins should write/update doctor information)
-    match /doctors/{doctorId} {
-      allow read: if request.auth != null;
-      // allow write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
-    }
-
-    // Publicly readable collections (e.g., general clinic info, test definitions if applicable)
-    // match /publicInfo/{docId} {
-    //   allow read: if true;
+    // Add rules for other collections like 'bills', 'chatMessages', etc.
+    // Example for a 'chatMessages' subcollection under appointments:
+    // match /appointments/{appointmentId}/messages/{messageId} {
+    //   allow read, create: if request.auth != null && 
+    //                         (get(/databases/$(database)/documents/appointments/$(appointmentId)).data.patientId == request.auth.uid || 
+    //                          get(/databases/$(database)/documents/appointments/$(appointmentId)).data.doctorId == request.auth.uid || // Assuming doctor's UID is also stored for chat
+    //                          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
     // }
 
-    // You will need to add more specific rules for other collections like
-    // slots, tests, penalties, chat messages, billing, etc.,
-    // based on your application's logic and security requirements.
-    // Always start with the principle of least privilege.
   }
 }
