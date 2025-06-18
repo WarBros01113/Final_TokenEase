@@ -4,13 +4,13 @@
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, ArrowLeft, CalendarCheck, Clock, MessageCircle, Users, Loader2 as LoaderIcon } from "lucide-react";
+import { AlertCircle, ArrowLeft, CalendarCheck, Clock, Users, Loader2 as LoaderIcon } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
 import Image from "next/image";
 import { useAuth } from "@/contexts/AuthContext";
-import { db, doc, getDoc, updateDoc, onSnapshot, Unsubscribe } from "@/lib/firebase"; // Added onSnapshot
+import { db, doc, getDoc, updateDoc, onSnapshot, Unsubscribe } from "@/lib/firebase"; 
 import type { Timestamp } from "firebase/firestore";
 import { useToast } from "@/hooks/use-toast";
 
@@ -20,22 +20,21 @@ interface AppointmentDetails {
   doctorName: string;
   doctorSpecialization: string;
   doctorAvatarUrl?: string;
-  appointmentDate: string; // YYYY-MM-DD
-  appointmentTime: string; // HH:MM (start time)
-  appointmentTimeDisplay: string; // "HH:MM AM/PM - HH:MM AM/PM"
+  appointmentDate: string; 
+  appointmentTime: string; 
+  appointmentTimeDisplay: string; 
   status: 'upcoming' | 'active' | 'delayed' | 'completed' | 'cancelled';
-  currentServingToken?: number; // Fetched from a live queue status document if available
+  currentServingToken?: number; 
   yourToken?: number;
   estimatedWaitTime?: string; 
-  clinicAddress: string; // Potentially from doctor or clinic settings
+  clinicAddress: string; 
   notes?: string;
   patientId: string;
 }
 
-// Placeholder for a live queue status if not part of appointment doc directly
 interface LiveQueueStatus {
     currentServingToken: number;
-    estimatedWaitTime: string; // for the specific doctor/queue
+    estimatedWaitTime: string; 
     updatedAt: Timestamp;
 }
 
@@ -50,16 +49,15 @@ export default function AppointmentStatusPage() {
   const [liveQueue, setLiveQueue] = useState<LiveQueueStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch initial appointment details
   useEffect(() => {
     if (!appointmentId || !user) {
-        if (!user && !isLoading) router.push('/login'); // Redirect if not logged in
+        if (!user && !isLoading) router.push('/login'); 
         return;
     };
     setIsLoading(true);
     const apptDocRef = doc(db, "appointments", appointmentId);
     
-    getDoc(apptDocRef).then(docSnap => {
+    const unsubscribeAppt = onSnapshot(apptDocRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.patientId !== user.uid) {
@@ -72,47 +70,43 @@ export default function AppointmentStatusPage() {
           doctorId: data.doctorId,
           doctorName: data.doctorName,
           doctorSpecialization: data.specialization || "Gynecology",
-          // doctorAvatarUrl: data.doctorAvatarUrl || `https://placehold.co/80x80.png?text=${data.doctorName?.substring(0,1) || 'D'}`,
           appointmentDate: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
           appointmentTime: data.appointmentTime,
           appointmentTimeDisplay: data.appointmentTimeDisplay || data.appointmentTime,
           status: data.status,
-          yourToken: data.tokenNumber, // This might be assigned later or upon check-in
-          clinicAddress: "TokenEase Gynecology Clinic, 123 Health St, Wellness City", // Placeholder
+          yourToken: data.tokenNumber, 
+          clinicAddress: "TokenEase Gynecology Clinic, 123 Health St, Wellness City", 
           notes: data.notes,
           patientId: data.patientId,
-          // currentServingToken and estimatedWaitTime will come from liveQueue listener
+          doctorAvatarUrl: data.doctorAvatarUrl,
         } as AppointmentDetails);
       } else {
         toast({variant: "destructive", title: "Not Found", description: "Appointment details could not be found."});
         router.push('/app/appointments');
       }
-    }).catch(error => {
+      setIsLoading(false);
+    }, (error) => {
         console.error("Error fetching appointment:", error);
         toast({variant: "destructive", title: "Error", description: "Failed to load appointment details."});
-    }).finally(() => {
         setIsLoading(false);
     });
-  }, [appointmentId, user, router, toast, isLoading]); // Added isLoading to deps of outer useEffect
+    
+    return () => unsubscribeAppt();
+  }, [appointmentId, user, router, toast, isLoading]);
 
-  // Listen to live queue status for the specific doctor (if appointment is active/upcoming)
   useEffect(() => {
-    if (!appointment || !appointment.doctorId || (appointment.status !== 'upcoming' && appointment.status !== 'active')) {
-      setLiveQueue(null); // Clear live queue if appointment not suitable for tracking
+    if (!appointment || !appointment.doctorId || (appointment.status !== 'upcoming' && appointment.status !== 'active' && appointment.status !== 'delayed')) {
+      setLiveQueue(null); 
       return;
     }
 
-    // Path to a document that holds the live queue status for the doctor.
-    // Example: /doctorQueueStatus/{doctorId}
-    // This document would be updated by the doctor's interface or an admin.
     const queueDocRef = doc(db, "doctorQueueStatus", appointment.doctorId);
     
-    const unsubscribe = onSnapshot(queueDocRef, (docSnap) => {
+    const unsubscribeQueue = onSnapshot(queueDocRef, (docSnap) => {
         if (docSnap.exists()) {
             const data = docSnap.data() as LiveQueueStatus;
             setLiveQueue(data);
             
-            // Update appointment status based on live token
             if (appointment.yourToken && data.currentServingToken >= appointment.yourToken && appointment.status !== 'completed' && appointment.status !== 'cancelled') {
                  setAppointment(prev => prev ? {...prev, status: 'active', estimatedWaitTime: 'Your turn soon!'} : null);
             } else if (appointment.status !== 'completed' && appointment.status !== 'cancelled') {
@@ -120,19 +114,16 @@ export default function AppointmentStatusPage() {
             }
 
         } else {
-            // No live queue data for this doctor, or document doesn't exist.
-            // You might want to set a default message or handle this case.
             setLiveQueue(null);
             console.log(`No live queue status found for doctor ${appointment.doctorId}`);
         }
     }, (error) => {
         console.error("Error listening to live queue status:", error);
-        // Don't show toast for listener errors usually, can be noisy.
     });
 
-    return () => unsubscribe(); // Cleanup listener on component unmount or when appointment changes
+    return () => unsubscribeQueue();
 
-  }, [appointment]); // Dependency on `appointment` object
+  }, [appointment]); 
 
   const handleCancelAppointment = async () => {
     if (!appointment || (appointment.status !== 'upcoming' && appointment.status !== 'active')) {
@@ -144,7 +135,7 @@ export default function AppointmentStatusPage() {
     try {
         const apptDocRef = doc(db, "appointments", appointment.id);
         await updateDoc(apptDocRef, { status: 'cancelled' });
-        setAppointment(prev => prev ? {...prev, status: 'cancelled'} : null);
+        // Appointment state will update via listener
         toast({title: "Appointment Cancelled", description: "Your appointment has been cancelled."});
     } catch (error) {
         console.error("Error cancelling appointment:", error);
@@ -176,7 +167,7 @@ export default function AppointmentStatusPage() {
   }
   
   const isYourTurn = appointment.status === 'active' && liveQueue?.currentServingToken && appointment.yourToken && liveQueue.currentServingToken >= appointment.yourToken;
-  const displayCurrentServingToken = liveQueue?.currentServingToken ?? (appointment.status === 'upcoming' ? '-' : appointment.yourToken ? appointment.yourToken -1 : '-'); // Fallback logic
+  const displayCurrentServingToken = liveQueue?.currentServingToken ?? (appointment.status === 'upcoming' ? '-' : appointment.yourToken ? appointment.yourToken -1 : '-'); 
   const displayEstimatedWaitTime = isYourTurn ? "Your turn soon!" : liveQueue?.estimatedWaitTime ?? appointment.estimatedWaitTime ?? "Calculating...";
 
   return (
@@ -257,11 +248,7 @@ export default function AppointmentStatusPage() {
              {appointment.notes && <p><strong className="text-foreground/80">Notes:</strong> {appointment.notes}</p>}
              
              <div className="pt-4 space-x-2">
-                <Button variant="outline" asChild>
-                    <Link href={`/app/chat?doctorId=${appointment.doctorId}`}> 
-                        <MessageCircle className="mr-2 h-4 w-4"/> Message Doctor
-                    </Link>
-                </Button>
+                {/* Message Doctor button removed */}
                 {(appointment.status === 'upcoming' || appointment.status === 'active') &&
                     <Button variant="destructive" onClick={handleCancelAppointment} type="button">Cancel Appointment</Button>
                 }

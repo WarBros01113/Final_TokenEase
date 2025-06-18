@@ -4,7 +4,7 @@
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, CalendarCheck, Clock, MessageCircle, Loader2 } from "lucide-react";
+import { AlertCircle, CalendarCheck, Clock, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEffect, useState, useCallback } from "react";
@@ -52,6 +52,8 @@ export default function PatientDashboardPage() {
   const fetchData = useCallback(async (currentUserId: string) => {
     setIsLoading(true);
     setError(null);
+    setUpcomingAppointments([]);
+    setActiveAppointmentForToken(null);
     try {
       const appointmentsRef = collection(db, "appointments");
       const today = new Date().toISOString().split('T')[0];
@@ -60,8 +62,8 @@ export default function PatientDashboardPage() {
       const qUpcoming = query(
         appointmentsRef,
         where("patientId", "==", currentUserId),
+        where("status", "in", ["upcoming", "active", "delayed"]),
         where("date", ">=", today),
-        where("status", "in", ["upcoming", "active", "delayed"]), // Include active and delayed as they are relevant for today
         orderBy("date", "asc"),
         orderBy("time", "asc")
       );
@@ -75,7 +77,7 @@ export default function PatientDashboardPage() {
           id: docSnap.id,
           doctorId: data.doctorId,
           doctorName: data.doctorName,
-          specialization: data.specialization,
+          specialization: data.specialization || "Gynecology",
           date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
           time: data.appointmentTime,
           appointmentTimeDisplay: data.appointmentTimeDisplay || data.appointmentTime,
@@ -85,7 +87,6 @@ export default function PatientDashboardPage() {
           createdAt: data.createdAt,
         };
         fetchedUpcomingAppointments.push(appointment);
-        // Find the most relevant appointment for live token display (active or earliest upcoming today)
         if (data.date === today && (data.status === 'active' || data.status === 'upcoming') && data.tokenNumber) {
             if (!foundActiveForToken || data.status === 'active' || (data.time < foundActiveForToken.time && foundActiveForToken.status !== 'active')) {
                 foundActiveForToken = appointment;
@@ -97,7 +98,7 @@ export default function PatientDashboardPage() {
 
     } catch (err: any) {
       console.error("Error fetching dashboard data:", err);
-      setError("Failed to load dashboard data. Please check your connection and ensure Firestore rules and indexes are correctly set up.");
+      setError("Failed to load dashboard data.");
     } finally {
       setIsLoading(false);
     }
@@ -106,8 +107,8 @@ export default function PatientDashboardPage() {
   useEffect(() => {
     if (user?.uid && !authLoading) {
       fetchData(user.uid);
-    } else if (!authLoading && !user?.uid) {
-      setIsLoading(false); // Not logged in or no UID
+    } else if (!authLoading && !user) {
+      setIsLoading(false); 
       setUpcomingAppointments([]);
       setActiveAppointmentForToken(null);
     }
@@ -129,7 +130,7 @@ export default function PatientDashboardPage() {
         setLiveQueue(null);
       });
     } else {
-      setLiveQueue(null); // No relevant appointment for live tracking
+      setLiveQueue(null); 
     }
     return () => {
       if (unsubscribe) unsubscribe();
@@ -156,18 +157,28 @@ export default function PatientDashboardPage() {
       </div>
     );
   }
+   if (!user && !authLoading) {
+    return (
+      <div className="text-center p-8">
+        <AlertCircle className="mx-auto h-16 w-16 text-destructive" />
+        <h2 className="text-2xl font-semibold">Not Logged In</h2>
+        <p className="text-muted-foreground">Please log in to view your dashboard.</p>
+        <Button asChild className="mt-4"><Link href="/login">Login</Link></Button>
+      </div>
+    );
+  }
 
   const tokenInfo: TokenInfo | null = activeAppointmentForToken && activeAppointmentForToken.tokenNumber ? {
     appointmentId: activeAppointmentForToken.id,
     doctorName: activeAppointmentForToken.doctorName,
     yourToken: activeAppointmentForToken.tokenNumber,
-    currentServingToken: liveQueue?.currentServingToken ?? (activeAppointmentForToken.tokenNumber - Math.floor(Math.random()*2+1)), // Basic fallback if no live data
+    currentServingToken: liveQueue?.currentServingToken ?? (activeAppointmentForToken.status === 'upcoming' ? '-' : (activeAppointmentForToken.tokenNumber - Math.floor(Math.random()*2+1))),
     estimatedWaitTime: liveQueue?.currentServingToken && activeAppointmentForToken.tokenNumber && liveQueue.currentServingToken >= activeAppointmentForToken.tokenNumber ? "Your turn soon!" : liveQueue?.estimatedWaitTime || "Calculating..."
   } : null;
 
   return (
     <div className="space-y-6">
-      <PageHeader title={`Welcome, ${user?.displayName || user?.fullName || 'Patient'}!`} description="Here's an overview of your upcoming activities." />
+      <PageHeader title={`Welcome, ${user?.displayName || 'Patient'}!`} description="Here's an overview of your upcoming activities." />
 
       {tokenInfo && (
         <Card className="bg-primary/10 border-primary shadow-lg">
@@ -175,7 +186,7 @@ export default function PatientDashboardPage() {
             <CardTitle className="text-primary flex items-center">
               <Clock className="mr-2 h-6 w-6" /> Live Token Status
             </CardTitle>
-            <CardDescription>Your current appointment with {tokenInfo.doctorName}.</CardDescription>
+            <CardDescription>Your current appointment with Dr. {tokenInfo.doctorName}.</CardDescription>
           </CardHeader>
           <CardContent className="grid md:grid-cols-3 gap-4 text-center">
             <div>
@@ -199,7 +210,7 @@ export default function PatientDashboardPage() {
         </Card>
       )}
 
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-2"> {/* Changed to 2 cols */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center"><CalendarCheck className="mr-2 h-5 w-5 text-primary" /> Upcoming Appointments</CardTitle>
@@ -209,7 +220,7 @@ export default function PatientDashboardPage() {
               <ul className="space-y-3 max-h-60 overflow-y-auto">
                 {upcomingAppointments.map(appt => (
                   <li key={appt.id} className="p-3 bg-secondary/50 rounded-md shadow-sm">
-                    <p className="font-semibold">{appt.doctorName} <span className="text-sm text-muted-foreground">({appt.specialization})</span></p>
+                    <p className="font-semibold">Dr. {appt.doctorName} <span className="text-sm text-muted-foreground">({appt.specialization})</span></p>
                     <p className="text-sm">{new Date(appt.date).toLocaleDateString()} at {appt.appointmentTimeDisplay}</p>
                     <Button variant="link" size="sm" asChild className="p-0 h-auto mt-1">
                       <Link href={`/app/appointments/${appt.id}/status`}>View Details</Link>
@@ -225,20 +236,6 @@ export default function PatientDashboardPage() {
             </Button>
           </CardContent>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center"><MessageCircle className="mr-2 h-5 w-5 text-primary" /> Recent Messages</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-center h-32 border-2 border-dashed rounded-md">
-                <p className="text-muted-foreground">No new messages.</p> {/* Chat integration needed */}
-            </div>
-            <Button asChild className="mt-4 w-full" variant="outline">
-              <Link href="/app/chat">Go to Chat</Link>
-            </Button>
-          </CardContent>
-        </Card>
         
         <Card>
           <CardHeader>
@@ -246,7 +243,7 @@ export default function PatientDashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="flex items-center justify-center h-32 border-2 border-dashed rounded-md">
-                 <p className="text-muted-foreground">No important notices.</p> {/* Dynamic notices needed */}
+                 <p className="text-muted-foreground">No important notices at this time.</p>
             </div>
           </CardContent>
         </Card>
@@ -263,9 +260,8 @@ export default function PatientDashboardPage() {
                     <h3 className="text-lg font-semibold text-primary mb-2">Focus on Your Wellbeing</h3>
                     <p className="text-muted-foreground">
                         Regular check-ups and open communication with your Gynecologist are key to maintaining good health.
-                        TokenEase helps you stay connected and informed.
+                        TokenEase helps you stay connected and informed for your gynecological care.
                     </p>
-                     {/* <Button variant="link" asChild className="p-0 h-auto mt-2"><Link href="#">Learn more</Link></Button> */}
                 </div>
             </div>
         </CardContent>
