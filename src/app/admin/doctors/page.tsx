@@ -39,7 +39,7 @@ const generateTimeSlots = (startHour: number, endHour: number, intervalMinutes: 
   return slots;
 };
 
-const availableTimeSlotsOptions = generateTimeSlots(9, 18, 15); // 9:00 AM up to 5:45 PM for 6 PM exclusive end
+const availableTimeSlotsOptions = generateTimeSlots(9, 17, 15); // 9:00 AM up to 4:45 PM for 5 PM exclusive end
 
 const doctorFormSchema = z.object({
   id: z.string().optional(),
