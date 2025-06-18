@@ -5,107 +5,99 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // Helper function to check admin role
-    // Assumes user documents in /users/{userId} have a 'role' field.
     function isAdmin() {
-      return request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      let userDocPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return request.auth != null && exists(userDocPath) && get(userDocPath).data.role == 'admin';
     }
 
     // Users collection:
     match /users/{userId} {
-      // Admins can read/update any user. Users can read/update their own profile.
       allow read, update: if request.auth != null && (request.auth.uid == userId || isAdmin());
-      // Authenticated users can create their own profile document (e.g., during signup).
       allow create: if request.auth != null && request.auth.uid == userId;
-      // Only admins can list all users.
       allow list: if isAdmin();
-      // Admins can delete users, users cannot delete their own accounts directly via rules (usually a backend process)
       allow delete: if isAdmin();
     }
 
     // User Settings collection:
-    // Allows users to read, create, and update their own settings document.
-    // Document ID is expected to be "userPrefs_" + userId.
-    // Admins can read/update/create any user's settings document.
     match /userSettings/{settingsDocId} {
       allow read, update: if request.auth != null && (settingsDocId == ("userPrefs_" + request.auth.uid) || isAdmin());
       allow create: if request.auth != null && (settingsDocId == ("userPrefs_" + request.auth.uid) || isAdmin());
-      // Deleting user settings might be admin-only or tied to account deletion.
       allow delete: if isAdmin();
     }
 
     // Appointments collection:
     match /appointments/{appointmentId} {
-      // Patients can create appointments for themselves (patientId in new doc must match their UID). Admins can also create appointments.
-      allow create: if request.auth != null && 
+      allow create: if request.auth != null &&
                      ( (request.resource.data.patientId == request.auth.uid) || isAdmin() );
-      // Patients can read/update their own appointments. Admins can read/update any appointment.
-      allow read, update: if request.auth != null && 
+      allow read, update: if request.auth != null &&
                            ( (resource.data.patientId == request.auth.uid) || isAdmin() );
       
-      // Patients can list their own appointments if the query filters by their patientId.
-      // Admins can list all appointments.
-      allow list: if request.auth != null &&
-                     (
-                       (request.query.filters.size() > 0 && request.query.filters[0][0] == 'patientId' && request.query.filters[0][2] == request.auth.uid) ||
-                       isAdmin()
-                     );
-      // Patients can delete (cancel) their own upcoming appointments. Admins can delete any.
+      allow list: if request.auth != null && (
+        isAdmin() ||
+        ( // Patient listing THEIR OWN appointments: checks if patientId is the first filter
+          request.query.filters.size() > 0 &&
+          request.query.filters[0][0] == 'patientId' &&
+          request.query.filters[0][2] == request.auth.uid
+        ) ||
+        ( // ANY authenticated user checking slot availability for a doctor on a specific date
+          request.query.filters.size() >= 2 &&
+          (
+            (request.query.filters[0][0] == 'doctorId' && request.query.filters[1][0] == 'date') ||
+            (request.query.filters[0][0] == 'date' && request.query.filters[1][0] == 'doctorId')
+          )
+        )
+      );
+
       allow delete: if request.auth != null &&
                      (
-                       (resource.data.patientId == request.auth.uid && resource.data.status == 'upcoming') || 
+                       (resource.data.patientId == request.auth.uid && resource.data.status == 'upcoming') ||
                        isAdmin()
                      );
     }
 
     // Doctors collection:
     match /doctors/{doctorId} {
-      allow read, list: if request.auth != null; // Any authenticated user can read/list doctors for booking.
-      allow create, update, delete: if isAdmin(); // Only admins manage doctors.
+      allow read, list: if request.auth != null;
+      allow create, update, delete: if isAdmin();
     }
     
     // Slot Configurations collection:
     match /slotConfigurations/{configId} {
-      allow read, list: if request.auth != null; // Patients need to query these for available slots.
-      allow create, update, delete: if isAdmin(); // Admins manage slot configurations.
+      allow read, list: if request.auth != null;
+      allow create, update, delete: if isAdmin();
     }
 
     // Tests collection (medical tests):
     match /tests/{testId} {
-      allow read, list: if request.auth != null; // Authenticated users (patients/admins) can read/list tests.
-      allow create, update, delete: if isAdmin(); // Admins manage tests.
+      allow read, list: if request.auth != null;
+      allow create, update, delete: if isAdmin();
     }
 
     // Bills collection:
     match /bills/{billId} {
-      // Patients can read/update their own bills. Admins can read/update any bill.
-      allow read, update: if request.auth != null && 
+      allow read, update: if request.auth != null &&
                            ( (resource.data.patientId == request.auth.uid) || isAdmin() );
-      // Patients can list their own bills. Admins can list all bills.
       allow list: if request.auth != null &&
                      (
                        (request.query.filters.size() > 0 && request.query.filters[0][0] == 'patientId' && request.query.filters[0][2] == request.auth.uid) ||
                        isAdmin()
                      );
-      // Creating/deleting bills is admin-only or system-driven.
       allow create, delete: if isAdmin();
     }
 
     // Clinic Configuration collection (e.g., global settings):
-    // Assumes a single document, e.g., "globalClinicSettings".
     match /clinicConfiguration/globalClinicSettings {
-      allow read: if request.auth != null; // Any authenticated user can read clinic settings.
-      allow write: if isAdmin(); // Only admins can change clinic settings (create/update/delete).
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
     }
 
     // Doctor Queue Status collection:
     match /doctorQueueStatus/{doctorId} {
-      allow read: if request.auth != null; // Any authenticated user can read live queue status.
-      // Writing to queue status should be restricted (e.g., admins or specific doctor role).
-      allow write: if isAdmin(); 
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
     }
 
     // --- Default Deny Rule ---
-    // This rule ensures that any path not explicitly matched above is denied.
     match /{document=**} {
       allow read, write: if false;
     }
