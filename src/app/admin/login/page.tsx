@@ -9,6 +9,7 @@ export default function AdminLoginPageRedirect() {
   const router = useRouter();
 
   useEffect(() => {
+    // Redirect to the main login page
     router.replace('/login');
   }, [router]);
 
