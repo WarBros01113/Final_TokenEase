@@ -29,7 +29,7 @@ type AppointmentFormValues = z.infer<typeof appointmentFormSchema>;
 interface DoctorOption {
   id: string;
   name: string;
-  specialization: string; // Should be "Gynecology"
+  specialization: string; 
 }
 
 interface TimeSlot {
@@ -48,7 +48,7 @@ interface BookedAppointment {
   date: string; // ISO String
   time: string; // Display time
   status: 'upcoming' | 'active' | 'completed' | 'cancelled';
-  type: string; // "In-Person" for now
+  type: string; 
   patientId: string;
 }
 
@@ -75,7 +75,8 @@ export default function AppointmentsPage() {
   const fetchDoctors = useCallback(async () => {
     setIsLoadingDoctors(true);
     try {
-      const q = firestoreQuery(collection(db, "doctors"), where("specialization", "==", "Gynecology"), orderBy("name"));
+      // Assuming all doctors are relevant for booking. If specialization filter is needed, re-add it.
+      const q = firestoreQuery(collection(db, "doctors"), orderBy("name"));
       const snapshot = await getDocs(q);
       const fetchedDoctors: DoctorOption[] = [];
       snapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, ...doc.data() } as DoctorOption));
@@ -94,7 +95,7 @@ export default function AppointmentsPage() {
         const q = firestoreQuery(
             collection(db, "appointments"), 
             where("patientId", "==", patientId), 
-            orderBy("date", "desc"), // Show recent first or upcoming
+            orderBy("date", "desc"), 
             orderBy("time", "desc")
         );
         const snapshot = await getDocs(q);
@@ -105,9 +106,9 @@ export default function AppointmentsPage() {
                 id: doc.id,
                 doctorName: data.doctorName,
                 date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
-                time: data.appointmentTimeDisplay || data.time, // Use a display friendly time
+                time: data.appointmentTimeDisplay || data.time, 
                 status: data.status,
-                type: "In-Person", // Assuming all are in-person
+                type: "In-Person", 
                 patientId: data.patientId,
             });
         });
@@ -142,7 +143,7 @@ export default function AppointmentsPage() {
           const qConfigs = firestoreQuery(
             slotConfigsRef,
             where("doctorId", "==", selectedDoctorId),
-            where("dayOfWeek", "==", dayOfWeek)
+            where("dayOfWeek", "array-contains", dayOfWeek) // Use array-contains for array field
           );
           const configSnapshot = await getDocs(qConfigs);
           if (configSnapshot.empty) {
@@ -163,16 +164,16 @@ export default function AppointmentsPage() {
               const slotStart = current;
               const slotEnd = new Date(slotStart.getTime() + config.slotDurationMinutes * 60000);
               
-              if (slotEnd > end) break; // Don't create slot if it exceeds master end time
+              if (slotEnd > end) break; 
 
               const startTimeStr = `${slotStart.getHours().toString().padStart(2,'0')}:${slotStart.getMinutes().toString().padStart(2,'0')}`;
               
               generatedSlots.push({
-                id: `${startTimeStr}_${confDoc.id}`, // Unique ID for the specific slot instance
+                id: `${startTimeStr}_${confDoc.id}`, 
                 time: `${startTimeStr} - ${slotEnd.getHours().toString().padStart(2,'0')}:${slotEnd.getMinutes().toString().padStart(2,'0')}`,
-                available: true, // Will be checked against bookings next
+                available: true, 
                 capacity: config.capacityPerSlot,
-                booked: 0, // Will be updated
+                booked: 0, 
                 slotConfigId: confDoc.id,
                 startTime: startTimeStr,
               });
@@ -246,14 +247,13 @@ export default function AppointmentsPage() {
         doctorId: doctor.id,
         doctorName: doctor.name,
         specialization: doctor.specialization,
-        date: selectedDate.toISOString().split('T')[0], // Store as YYYY-MM-DD string
-        time: selectedSlot.startTime, // Store actual start time e.g. "09:00"
-        appointmentTime: selectedSlot.startTime, // Redundant, but might be used by other parts for specific time
-        appointmentTimeDisplay: selectedSlot.time, // For display "09:00 AM - 09:30 AM"
+        date: selectedDate.toISOString().split('T')[0], 
+        time: selectedSlot.startTime, 
+        appointmentTime: selectedSlot.startTime, 
+        appointmentTimeDisplay: selectedSlot.time, 
         slotConfigId: selectedSlot.slotConfigId,
-        status: 'upcoming', // Initial status
+        status: 'upcoming', 
         createdAt: serverTimestamp(),
-        // tokenNumber: will be assigned by a backend process or upon check-in ideally
       };
       await addDoc(collection(db, "appointments"), appointmentData);
       
@@ -265,7 +265,7 @@ export default function AppointmentsPage() {
       reset(); 
       setSelectedDoctorId(null);
       setAvailableSlots([]);
-      fetchBookedAppointments(user.uid); // Refresh booked list
+      fetchBookedAppointments(user.uid); 
     } catch (error: any) {
         console.error("Error booking appointment: ", error);
         toast({ variant: "destructive", title: "Booking Error", description: error.message || "Could not book appointment."});
@@ -296,7 +296,7 @@ export default function AppointmentsPage() {
           <Card className="shadow-lg">
             <CardHeader>
               <CardTitle className="flex items-center"><CalendarPlus className="mr-2 h-6 w-6 text-primary" /> Book a New Appointment</CardTitle>
-              <CardDescription>Select a Gynecologist, date, and time slot for your appointment.</CardDescription>
+              <CardDescription>Select a doctor, date, and time slot for your appointment.</CardDescription>
             </CardHeader>
             <CardContent>
               <Form {...form}>
@@ -310,13 +310,13 @@ export default function AppointmentsPage() {
                         <Select onValueChange={(value) => { field.onChange(value); setSelectedDoctorId(value); setValue("timeSlotId", ""); setAvailableSlots([]); }} defaultValue={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Choose a Gynecologist" />
+                              <SelectValue placeholder="Choose a Doctor" />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
                             {doctors.map(doc => (
                               <SelectItem key={doc.id} value={doc.id}>
-                                {doc.name} ({doc.specialization})
+                                {doc.name} {doc.specialization ? `(${doc.specialization})` : ''}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -338,7 +338,7 @@ export default function AppointmentsPage() {
                               mode="single"
                               selected={field.value}
                               onSelect={(date) => { field.onChange(date); setValue("timeSlotId", ""); setAvailableSlots([]); }}
-                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate())) } // Disable past dates, allow today
+                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate())) } 
                               initialFocus
                               className="rounded-md border self-start"
                             />
@@ -441,3 +441,6 @@ export default function AppointmentsPage() {
     </div>
   );
 }
+
+
+    
