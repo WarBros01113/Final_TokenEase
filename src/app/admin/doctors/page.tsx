@@ -1,54 +1,74 @@
+
 "use client";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { PlusCircle, Edit, Trash2, UserPlus, Eye } from "lucide-react";
-import { useState, useEffect } from "react";
+import { PlusCircle, Edit, Trash2, UserPlus, Eye, Users as UsersIcon, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
+import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, orderBy, query as firestoreQuery } from "@/lib/firebase";
 
 const doctorFormSchema = z.object({
-  id: z.string().optional(), // For editing
+  id: z.string().optional(), 
   name: z.string().min(2, "Name must be at least 2 characters."),
   email: z.string().email("Invalid email address."),
   specialization: z.string().min(2, "Specialization is required."),
   phoneNumber: z.string().regex(/^\d{10}$/, "Phone number must be 10 digits.").optional().or(z.literal('')),
-  availabilityNotes: z.string().optional(), // e.g. "Mon-Fri, 9am-5pm"
+  availabilityNotes: z.string().optional(), 
 });
 
 type DoctorFormValues = z.infer<typeof doctorFormSchema>;
 
 interface Doctor extends DoctorFormValues {
-  id: string; // Ensure id is always present after creation
+  id: string; 
+  createdAt?: any; // Firestore Timestamp
 }
 
-const mockSpecializations = ["Cardiology", "Pediatrics", "Dermatology", "Orthopedics", "Neurology", "General Medicine"];
+const mockSpecializations = ["Cardiology", "Pediatrics", "Dermatology", "Orthopedics", "Neurology", "General Medicine", "Oncology", "Psychiatry"];
 
 export default function ManageDoctorsPage() {
   const { toast } = useToast();
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingDoctor, setEditingDoctor] = useState<Doctor | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<DoctorFormValues>({
     resolver: zodResolver(doctorFormSchema),
     defaultValues: { name: "", email: "", specialization: "", phoneNumber: "", availabilityNotes: "" },
   });
 
+  const fetchDoctors = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const doctorsCollection = collection(db, "doctors");
+      const q = firestoreQuery(doctorsCollection, orderBy("name", "asc"));
+      const querySnapshot = await getDocs(q);
+      const fetchedDoctors: Doctor[] = [];
+      querySnapshot.forEach((doc) => {
+        fetchedDoctors.push({ id: doc.id, ...doc.data() } as Doctor);
+      });
+      setDoctors(fetchedDoctors);
+    } catch (error) {
+      console.error("Error fetching doctors: ", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not fetch doctors." });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast]);
+
   useEffect(() => {
-    // Mock fetch doctors
-    setDoctors([
-      { id: "doc1", name: "Dr. Alice Smith", email: "alice@example.com", specialization: "Cardiology", phoneNumber: "1234567890", availabilityNotes: "Mon, Wed, Fri 9am-1pm" },
-      { id: "doc2", name: "Dr. Bob Johnson", email: "bob@example.com", specialization: "Pediatrics", phoneNumber: "0987654321", availabilityNotes: "Tue, Thu 10am-4pm" },
-    ]);
-  }, []);
+    fetchDoctors();
+  }, [fetchDoctors]);
 
   const handleDialogOpen = (doctor?: Doctor) => {
     if (doctor) {
@@ -62,26 +82,47 @@ export default function ManageDoctorsPage() {
   };
 
   const onSubmit = async (values: DoctorFormValues) => {
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    if (editingDoctor) {
-      setDoctors(doctors.map(d => d.id === editingDoctor.id ? { ...editingDoctor, ...values } : d));
-      toast({ title: "Doctor Updated", description: `${values.name} has been updated.` });
-    } else {
-      const newDoctor = { ...values, id: `doc${Date.now()}` } as Doctor;
-      setDoctors([...doctors, newDoctor]);
-      toast({ title: "Doctor Added", description: `${values.name} has been added.` });
+    setIsSubmitting(true);
+    try {
+      if (editingDoctor) {
+        const doctorRef = doc(db, "doctors", editingDoctor.id);
+        await updateDoc(doctorRef, values);
+        toast({ title: "Doctor Updated", description: `${values.name} has been updated.` });
+      } else {
+        await addDoc(collection(db, "doctors"), { ...values, createdAt: serverTimestamp() });
+        toast({ title: "Doctor Added", description: `${values.name} has been added.` });
+      }
+      fetchDoctors(); // Refresh list
+      setIsDialogOpen(false);
+      form.reset();
+    } catch (error: any) {
+      console.error("Error saving doctor: ", error);
+      toast({ variant: "destructive", title: "Save Error", description: error.message || "Could not save doctor details." });
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsDialogOpen(false);
-    form.reset();
   };
 
-  const handleDeleteDoctor = async (doctorId: string) => {
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setDoctors(doctors.filter(d => d.id !== doctorId));
-    toast({ title: "Doctor Deleted", description: "The doctor has been removed.", variant: "destructive" });
+  const handleDeleteDoctor = async (doctorId: string, doctorName: string) => {
+    if (!window.confirm(`Are you sure you want to delete Dr. ${doctorName}?`)) return;
+    try {
+      await deleteDoc(doc(db, "doctors", doctorId));
+      toast({ title: "Doctor Deleted", description: `Dr. ${doctorName} has been removed.`, variant: "destructive" });
+      fetchDoctors(); // Refresh list
+    } catch (error) {
+      console.error("Error deleting doctor: ", error);
+      toast({ variant: "destructive", title: "Delete Error", description: "Could not delete doctor." });
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="ml-2">Loading doctors...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -99,7 +140,7 @@ export default function ManageDoctorsPage() {
         <CardContent>
           {doctors.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-                <Users className="mx-auto h-12 w-12 mb-4"/>
+                <UsersIcon className="mx-auto h-12 w-12 mb-4"/>
                 <p>No doctors found. Add a new doctor to get started.</p>
             </div>
           ) : (
@@ -123,13 +164,13 @@ export default function ManageDoctorsPage() {
                   <TableCell>{doctor.phoneNumber || 'N/A'}</TableCell>
                   <TableCell>{doctor.availabilityNotes || 'N/A'}</TableCell>
                   <TableCell className="text-right space-x-2">
-                    <Button variant="ghost" size="icon" onClick={() => {/* View details logic */ toast({title: "View Doctor", description: "View doctor details not implemented."})}}>
+                    <Button variant="ghost" size="icon" onClick={() => toast({title: "View Doctor", description: "View doctor details not implemented."})}>
                       <Eye className="h-4 w-4" />
                     </Button>
                     <Button variant="ghost" size="icon" onClick={() => handleDialogOpen(doctor)}>
                       <Edit className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive/80" onClick={() => handleDeleteDoctor(doctor.id)}>
+                    <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive/80" onClick={() => handleDeleteDoctor(doctor.id, doctor.name)}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </TableCell>
@@ -157,7 +198,7 @@ export default function ManageDoctorsPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Full Name</FormLabel>
-                    <FormControl><Input placeholder="Dr. John Doe" {...field} /></FormControl>
+                    <FormControl><Input placeholder="Dr. John Doe" {...field} suppressHydrationWarning={true}/></FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -168,7 +209,7 @@ export default function ManageDoctorsPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Email Address</FormLabel>
-                    <FormControl><Input type="email" placeholder="doctor@example.com" {...field} /></FormControl>
+                    <FormControl><Input type="email" placeholder="doctor@example.com" {...field} suppressHydrationWarning={true}/></FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -181,7 +222,7 @@ export default function ManageDoctorsPage() {
                     <FormLabel>Specialization</FormLabel>
                      <Select onValueChange={field.onChange} defaultValue={field.value}>
                         <FormControl>
-                          <SelectTrigger>
+                          <SelectTrigger suppressHydrationWarning={true}>
                             <SelectValue placeholder="Select specialization" />
                           </SelectTrigger>
                         </FormControl>
@@ -201,7 +242,7 @@ export default function ManageDoctorsPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Phone Number (Optional)</FormLabel>
-                    <FormControl><Input type="tel" placeholder="1234567890" {...field} /></FormControl>
+                    <FormControl><Input type="tel" placeholder="1234567890" {...field} suppressHydrationWarning={true}/></FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -212,15 +253,15 @@ export default function ManageDoctorsPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Availability Notes (Optional)</FormLabel>
-                    <FormControl><Input placeholder="e.g., Mon-Fri, 9am-12pm" {...field} /></FormControl>
+                    <FormControl><Input placeholder="e.g., Mon-Fri, 9am-12pm" {...field} suppressHydrationWarning={true}/></FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
               <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
-                <Button type="submit" className="bg-accent hover:bg-accent/90 text-accent-foreground">
-                    {form.formState.isSubmitting ? "Saving..." : (editingDoctor ? "Save Changes" : "Add Doctor")}
+                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)} suppressHydrationWarning={true}>Cancel</Button>
+                <Button type="submit" className="bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isSubmitting} suppressHydrationWarning={true}>
+                    {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin"/>Saving...</> : (editingDoctor ? "Save Changes" : "Add Doctor")}
                 </Button>
               </DialogFooter>
             </form>

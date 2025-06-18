@@ -1,3 +1,4 @@
+
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -53,19 +54,23 @@ export default function RegisterPage() {
   async function onSubmit(values: RegisterFormValues) {
     setIsLoading(true);
     try {
-      // In a real app, you might pass fullName to the signUp function
-      // to store it in Firebase profile or Firestore.
-      await signUp(values.email, values.password); 
+      await signUp(values.email, values.password, values.fullName); 
       toast({
         title: "Registration Successful",
         description: "Your account has been created. Please login.",
       });
-      router.push("/login"); // Redirect to login page after successful registration
+      router.push("/login"); 
     } catch (error: any) {
+      let errorMessage = "An unknown error occurred. Please try again.";
+      if (error.code === 'auth/email-already-in-use') {
+        errorMessage = "This email address is already in use. Please try another one or log in.";
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
       toast({
         variant: "destructive",
         title: "Registration Failed",
-        description: error.message || "An unknown error occurred. Please try again.",
+        description: errorMessage,
       });
     } finally {
       setIsLoading(false);
@@ -96,7 +101,7 @@ export default function RegisterPage() {
                  <div className="relative">
                   <User className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                   <FormControl>
-                    <Input placeholder="John Doe" {...field} className="pl-10" />
+                    <Input placeholder="John Doe" {...field} className="pl-10" suppressHydrationWarning={true} />
                   </FormControl>
                 </div>
                 <FormMessage />
@@ -112,7 +117,7 @@ export default function RegisterPage() {
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                   <FormControl>
-                    <Input type="email" placeholder="you@example.com" {...field} className="pl-10" />
+                    <Input type="email" placeholder="you@example.com" {...field} className="pl-10" suppressHydrationWarning={true} />
                   </FormControl>
                 </div>
                 <FormMessage />
@@ -128,7 +133,7 @@ export default function RegisterPage() {
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                   <FormControl>
-                    <Input type="password" placeholder="••••••••" {...field} className="pl-10" />
+                    <Input type="password" placeholder="••••••••" {...field} className="pl-10" suppressHydrationWarning={true} />
                   </FormControl>
                 </div>
                 <FormMessage />
@@ -144,14 +149,14 @@ export default function RegisterPage() {
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                   <FormControl>
-                    <Input type="password" placeholder="••••••••" {...field} className="pl-10" />
+                    <Input type="password" placeholder="••••••••" {...field} className="pl-10" suppressHydrationWarning={true} />
                   </FormControl>
                 </div>
                 <FormMessage />
               </FormItem>
             )}
           />
-          <Button type="submit" className="w-full bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isLoading}>
+          <Button type="submit" className="w-full bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isLoading} suppressHydrationWarning={true}>
             {isLoading ? "Creating account..." : "Create Account"}
           </Button>
         </form>

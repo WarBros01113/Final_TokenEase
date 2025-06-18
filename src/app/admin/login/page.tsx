@@ -1,3 +1,4 @@
+
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -31,7 +32,7 @@ type AdminLoginFormValues = z.infer<typeof adminLoginFormSchema>;
 export default function AdminLoginPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const { signIn } = useAuth(); // Using the same signIn, role is determined by mock backend
+  const { signIn, signOut } = useAuth(); 
   const [isLoading, setIsLoading] = useState(false);
 
   const form = useForm<AdminLoginFormValues>({
@@ -53,16 +54,20 @@ export default function AdminLoginPage() {
         });
         router.push("/admin/dashboard");
       } else {
-        // Sign out if login was successful but not for an admin role
-        // This scenario might not happen if backend strictly validates admin credentials
-        // await signOut(); // This might be needed if signIn doesn't restrict to admin
+        await signOut(); // Sign out if login was successful but not for an admin role
         throw new Error("Access Denied. Not an admin account.");
       }
     } catch (error: any) {
+       let errorMessage = "Invalid credentials or not an admin account.";
+        if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
+            errorMessage = "Invalid email or password.";
+        } else if (error.message) {
+            errorMessage = error.message;
+        }
       toast({
         variant: "destructive",
         title: "Admin Login Failed",
-        description: error.message || "Invalid credentials or not an admin account.",
+        description: errorMessage,
       });
     } finally {
       setIsLoading(false);
@@ -88,7 +93,7 @@ export default function AdminLoginPage() {
                  <div className="relative">
                   <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                   <FormControl>
-                    <Input type="email" placeholder="admin@example.com" {...field} className="pl-10" />
+                    <Input type="email" placeholder="admin@example.com" {...field} className="pl-10" suppressHydrationWarning={true}/>
                   </FormControl>
                 </div>
                 <FormMessage />
@@ -104,14 +109,14 @@ export default function AdminLoginPage() {
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                   <FormControl>
-                    <Input type="password" placeholder="••••••••" {...field} className="pl-10" />
+                    <Input type="password" placeholder="••••••••" {...field} className="pl-10" suppressHydrationWarning={true}/>
                   </FormControl>
                 </div>
                 <FormMessage />
               </FormItem>
             )}
           />
-          <Button type="submit" className="w-full bg-primary hover:bg-primary/90" disabled={isLoading}>
+          <Button type="submit" className="w-full bg-primary hover:bg-primary/90" disabled={isLoading} suppressHydrationWarning={true}>
             {isLoading ? "Authenticating..." : "Login to Admin Panel"}
           </Button>
         </form>
