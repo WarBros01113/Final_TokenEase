@@ -11,8 +11,8 @@ import { Separator } from "@/components/ui/separator";
 import { Edit3, Mail, Phone, CalendarDays as CalendarIcon, ShieldAlert, Loader2 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { db, doc, updateDoc, getDoc } from "@/lib/firebase";
-import { updateProfile as updateFirebaseUserProfile } from "firebase/auth"; // Renamed to avoid conflict
+import { db, doc, updateDoc, getDoc, auth } from "@/lib/firebase"; // Added auth import
+import { updateProfile as updateFirebaseUserProfile } from "firebase/auth"; 
 
 interface ProfileData {
   displayName: string;
@@ -139,7 +139,7 @@ export default function PatientProfilePage() {
       <Card className="shadow-lg">
         <CardHeader className="flex flex-col items-center text-center sm:flex-row sm:text-left">
           <Avatar className="h-24 w-24 mb-4 sm:mb-0 sm:mr-6 ring-2 ring-primary ring-offset-2">
-            <AvatarImage src={profileData.photoURL || `https://placehold.co/100x100.png?text=${getInitials(profileData.displayName)}`} alt={profileData.displayName} />
+            <AvatarImage src={profileData.photoURL || `https://placehold.co/100x100.png?text=${getInitials(profileData.displayName)}`} alt={profileData.displayName} data-ai-hint="person face" />
             <AvatarFallback>{getInitials(profileData.displayName)}</AvatarFallback>
           </Avatar>
           <div>
