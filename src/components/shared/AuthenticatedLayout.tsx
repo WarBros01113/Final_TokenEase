@@ -1,3 +1,4 @@
+
 "use client";
 
 import type React from 'react';
@@ -82,7 +83,7 @@ export function AuthenticatedLayout({ children, navItems, userRole }: Authentica
           <SidebarMenu>
             {navItems.map((item) => (
               <SidebarMenuItem key={item.label}>
-                <Link href={item.href} passHref legacyBehavior>
+                <Link href={item.href}>
                   <SidebarMenuButton
                     className="w-full justify-start"
                     tooltip={item.label}
