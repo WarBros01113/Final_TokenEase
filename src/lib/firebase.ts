@@ -1,7 +1,7 @@
 
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
 import { getAuth, connectAuthEmulator, Auth } from "firebase/auth";
-import { getFirestore, connectFirestoreEmulator, Firestore, collection, doc, setDoc, getDoc, serverTimestamp, updateDoc, addDoc, getDocs, deleteDoc, query, where, orderBy, writeBatch, Timestamp, onSnapshot } from "firebase/firestore";
+import { getFirestore, connectFirestoreEmulator, Firestore, collection, doc, setDoc, getDoc, serverTimestamp, updateDoc, addDoc, getDocs, deleteDoc, query, where, orderBy, writeBatch, Timestamp, onSnapshot, limit } from "firebase/firestore"; // Added limit
 import { getStorage, connectStorageEmulator, Storage } from "firebase/storage";
 
 const firebaseConfig = {
@@ -34,4 +34,5 @@ if (USE_FIREBASE_EMULATOR) {
   connectStorageEmulator(storage, "localhost", 9199);
 }
 
-export { auth, db, storage, collection, doc, setDoc, getDoc, updateDoc, addDoc, getDocs, deleteDoc, query, where, orderBy, serverTimestamp, writeBatch, Timestamp, onSnapshot };
+export { auth, db, storage, collection, doc, setDoc, getDoc, updateDoc, addDoc, getDocs, deleteDoc, query, where, orderBy, serverTimestamp, writeBatch, Timestamp, onSnapshot, limit }; // Added limit
+
