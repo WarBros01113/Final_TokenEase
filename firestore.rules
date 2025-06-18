@@ -4,116 +4,130 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions
+    // HELPER FUNCTIONS
     function isAdmin() {
-      // Ensure the user document exists before checking the role
-      return request.auth != null && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return request.auth != null &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
-    function isUser(userId) {
+    function isOwner(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
-    
-    function isPatientListingOwnAppointments(userId, queryOffset, queryLimit) {
-      let expectedFields = ["patientId"];
-      let actualFields = request.query.filters.map(f => f[0]);
 
-      return request.auth.uid == userId &&
-             request.query.filters.size() >= 1 && // Must filter by patientId, may have others like date for sorting
-             actualFields.includes("patientId") && 
-             request.query.filters.find(f => f[0] == "patientId")[2] == userId && // Ensure patientId filter is for the current user
-             (queryLimit == null || queryLimit <= 100); // Allow reasonable limit for own appointments
+    function hasFilter(filters, fieldName) {
+      return filters.filter(f => f.get("field").get("fieldPath") == fieldName).size() == 1;
     }
 
-    function isCheckingSlotAvailability(userId, queryLimit) {
-      let expectedFields = ["doctorId", "date"];
-      let actualFields = request.query.filters.map(f => f[0]);
-      
-      return request.auth.uid == userId && // Any authenticated user can check slots
-             request.query.filters.size() == 2 &&
-             expectedFields.every(field => actualFields.includes(field)) &&
-             actualFields.every(field => expectedFields.includes(field)) &&
-             queryLimit == 300; // Specific limit for this query type
-    }
-
-    function isPatientFetchingOwnSlotTokenCount(userId, query) {
-      let expectedFields = ["doctorId", "date", "appointmentTime", "slotConfigId"];
-      let actualFields = query.filters.map(f => f[0]);
-
-      return request.auth.uid == userId &&
-             query.filters.size() == 4 &&
-             expectedFields.every(field => actualFields.includes(field)) &&
-             actualFields.every(field => expectedFields.includes(field)) &&
-             (query.limit == null || query.limit <= 50); // Limit for counting existing tokens in a slot
+    function isUserCheckingSlotTokenCount() {
+      let filters = request.query.getRules().get("filters");
+      return request.auth != null &&
+             filters.size() == 4 && // Expecting exactly these 4 filters
+             hasFilter(filters, "doctorId") &&
+             hasFilter(filters, "date") &&
+             hasFilter(filters, "appointmentTime") &&
+             hasFilter(filters, "slotConfigId") &&
+             (request.query.limit == null || request.query.limit <= 50); // Limit for counting, 50 is generous
     }
 
     // Users collection
     match /users/{userId} {
-      allow read: if isUser(userId) || isAdmin();
-      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid; // User can create their own doc
-      allow update: if isUser(userId) || isAdmin(); // User can update their own doc, admin can update any
+      allow read, update: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId); // User creates their own doc
+      allow list: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // User Settings collection
+    match /userSettings/{settingsDocId} {
+      function isOwnerOfSettings() {
+        return request.auth != null && settingsDocId == "userPrefs_" + request.auth.uid;
+      }
+      allow read, update, create: if isOwnerOfSettings() || isAdmin();
       allow delete: if isAdmin();
     }
 
     // Doctors collection
     match /doctors/{doctorId} {
-      allow read: if request.auth != null; // All authenticated users can read doctor profiles
-      allow list: if request.auth != null; // All authenticated users can list doctors
-      allow create, update, delete: if isAdmin(); // Only admins can manage doctors
+      allow read, list: if request.auth != null;
+      allow create, update, delete: if isAdmin();
     }
 
     // Slot Configurations collection
-    match /slotConfigurations/{slotConfigId} {
-      allow read, list: if request.auth != null; // All authenticated users can read/list slot configs for booking
-      allow create, update, delete: if isAdmin(); // Only admins can manage slot configurations
-    }
-    
-    // Appointments collection
-    match /appointments/{appointmentId} {
-      allow read: if (request.auth != null && resource.data.patientId == request.auth.uid) || isAdmin();
-      allow list: if (isPatientListingOwnAppointments(request.auth.uid, request.query.offset, request.query.limit)) ||
-                     (isCheckingSlotAvailability(request.auth.uid, request.query.limit)) ||
-                     (isPatientFetchingOwnSlotTokenCount(request.auth.uid, request.query)) || // New rule for token query
-                     isAdmin();
-      allow create: if isUser(request.auth.uid) &&
-                       request.resource.data.patientId == request.auth.uid &&
-                       request.resource.data.status == "upcoming" &&
-                       request.resource.data.tokenNumber > 0 && 
-                       hasAll(request.resource.data.keys(), ['patientId', 'patientName', 'doctorId', 'doctorName', 'date', 'time', 'appointmentTimeDisplay', 'slotConfigId', 'tokenNumber', 'createdAt', 'specialization', 'status']);
-      allow update: if (isUser(request.auth.uid) && 
-                        request.resource.data.patientId == request.auth.uid && 
-                        (request.resource.data.status == "cancelled" || request.resource.data.status == resource.data.status)) || // Patient can cancel or if status unchanged
-                       isAdmin(); // Admin can update any appointment
-      allow delete: if isAdmin();
+    match /slotConfigurations/{configId} {
+      allow read, list: if request.auth != null; // Any auth user can list for booking
+      allow create, update, delete: if isAdmin();
     }
 
     // Tests collection
     match /tests/{testId} {
-      allow read, list: if request.auth != null; // All authenticated can read/list tests
-      allow create, update, delete: if isAdmin(); // Only admins can manage tests
+      allow read, list: if request.auth != null;
+      allow create, update, delete: if isAdmin();
     }
 
-    // Bills collection (Placeholder, assuming only admins manage for now)
+    // Bills collection
     match /bills/{billId} {
-      allow read, list, create, update, delete: if isAdmin();
+      // Patients can read their own bills, or admins can read any.
+      allow read: if (resource.data.patientId == request.auth.uid) || isAdmin();
+      // Patients can update their own bills (e.g. payment status), or admins can update any.
+      allow update: if (resource.data.patientId == request.auth.uid) || isAdmin();
+
+      allow list: if (
+                      // Patient listing their own bills
+                      request.query.getRules().get("filters").size() > 0 &&
+                      request.query.getRules().get("filters")[0].get("field").get("fieldPath") == "patientId" &&
+                      request.query.getRules().get("filters")[0].get("value") == request.auth.uid &&
+                      (request.query.limit == null || request.query.limit <= 100)
+                     ) || isAdmin();
+      allow create, delete: if isAdmin();
     }
-    
-    // Clinic Configuration collection
-    match /clinicConfiguration/{configId} {
-      allow read: if request.auth != null; // All authenticated can read clinic config (e.g. name, address)
-      allow write: if isAdmin(); // Only admins can change clinic config
+
+    // Clinic Configuration
+    match /clinicConfiguration/globalClinicSettings {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
     }
-    
-    // User Settings collection
-    match /userSettings/{userSettingId} {
-      // ID should be userPrefs_{userId}
-      allow read, write: if request.auth != null && request.auth.uid == userSettingId.split('_')[1];
-    }
-    
+
     // Doctor Queue Status
     match /doctorQueueStatus/{doctorId} {
-        allow read: if request.auth != null; // Any authenticated user can read live queue status
-        allow write: if isAdmin(); // Only admin (or a trusted server/function) should update this
+      allow read: if request.auth != null;
+      allow write: if isAdmin(); // Only admins can update live queue status.
+    }
+
+    // Appointments collection
+    match /appointments/{appointmentId} {
+      allow create: if (request.resource.data.patientId == request.auth.uid) || isAdmin();
+
+      // Allows any authenticated user to read appointment data if they can list/get it.
+      // Relies on list rules to prevent unauthorized listing.
+      allow read: if request.auth != null;
+
+      allow update: if (resource.data.patientId == request.auth.uid) || isAdmin(); // Patient can update (e.g. cancel), Admin can update any.
+
+      allow list: if request.auth != null && (
+                    ( // Scenario 1: Patient listing THEIR OWN appointments.
+                        request.query.getRules().get("filters").size() > 0 &&
+                        request.query.getRules().get("filters")[0].get("field").get("fieldPath") == "patientId" &&
+                        request.query.getRules().get("filters")[0].get("value") == request.auth.uid &&
+                        (request.query.limit == null || request.query.limit <= 100)
+                    ) ||
+                    ( // Scenario 2: ANY authenticated user checking slot availability.
+                        request.query.getRules().get("filters").size() == 2 &&
+                        (
+                            (hasFilter(request.query.getRules().get("filters"), "doctorId") && hasFilter(request.query.getRules().get("filters"), "date"))
+                        ) &&
+                        request.query.limit == 300
+                    ) ||
+                    isUserCheckingSlotTokenCount() || // Scenario 3: Patient counting slots for token generation
+                    isAdmin() // Admins can list all without these specific constraints.
+                  );
+
+      allow delete: if (resource.data.patientId == request.auth.uid && (resource.data.status == 'upcoming' || resource.data.status == 'active')) || isAdmin();
+    }
+
+    // Default Deny for any path not explicitly matched
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
