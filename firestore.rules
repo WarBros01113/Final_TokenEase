@@ -15,41 +15,97 @@ service cloud.firestore {
       // Admins can read/update any user. Users can read/update their own profile.
       allow read, update: if request.auth != null && (request.auth.uid == userId || isAdmin());
       // Authenticated users can create their own profile document (e.g., during signup).
-      // Client-side logic should ensure the {userId} in the path matches request.auth.uid.
-      allow create: if request.auth != null;
+      allow create: if request.auth != null && request.auth.uid == userId;
       // Only admins can list all users.
       allow list: if isAdmin();
+      // Admins can delete users, users cannot delete their own accounts directly via rules (usually a backend process)
+      allow delete: if isAdmin();
+    }
+
+    // User Settings collection:
+    // Allows users to read, create, and update their own settings document.
+    // Document ID is expected to be "userPrefs_" + userId.
+    // Admins can read/update/create any user's settings document.
+    match /userSettings/{settingsDocId} {
+      allow read, update: if request.auth != null && (settingsDocId == ("userPrefs_" + request.auth.uid) || isAdmin());
+      allow create: if request.auth != null && (settingsDocId == ("userPrefs_" + request.auth.uid) || isAdmin());
+      // Deleting user settings might be admin-only or tied to account deletion.
+      allow delete: if isAdmin();
     }
 
     // Appointments collection:
     match /appointments/{appointmentId} {
-      // Patients can create appointments for themselves. Admins can also create appointments.
-      allow create: if request.auth != null && (request.resource.data.patientId == request.auth.uid || isAdmin());
+      // Patients can create appointments for themselves (patientId in new doc must match their UID). Admins can also create appointments.
+      allow create: if request.auth != null && 
+                     ( (request.resource.data.patientId == request.auth.uid) || isAdmin() );
       // Patients can read/update their own appointments. Admins can read/update any appointment.
-      allow read, update: if request.auth != null && (resource.data.patientId == request.auth.uid || isAdmin());
+      allow read, update: if request.auth != null && 
+                           ( (resource.data.patientId == request.auth.uid) || isAdmin() );
       
       // Patients can list their own appointments if the query filters by their patientId.
       // Admins can list all appointments.
-      // This rule expects that a patient's query for appointments includes a 'where("patientId", "==", request.auth.uid)' clause,
-      // and that this is the first 'where' clause if there are multiple 'where' conditions in the query.
       allow list: if request.auth != null &&
                      (
                        (request.query.filters.size() > 0 && request.query.filters[0][0] == 'patientId' && request.query.filters[0][2] == request.auth.uid) ||
+                       isAdmin()
+                     );
+      // Patients can delete (cancel) their own upcoming appointments. Admins can delete any.
+      allow delete: if request.auth != null &&
+                     (
+                       (resource.data.patientId == request.auth.uid && resource.data.status == 'upcoming') || 
                        isAdmin()
                      );
     }
 
     // Doctors collection:
     match /doctors/{doctorId} {
-      // Any authenticated user can read doctor information and list all doctors.
-      allow read, list: if request.auth != null;
-      // Only admins can create, update, or delete doctor information.
-      allow create, update, delete: if isAdmin();
+      allow read, list: if request.auth != null; // Any authenticated user can read/list doctors for booking.
+      allow create, update, delete: if isAdmin(); // Only admins manage doctors.
+    }
+    
+    // Slot Configurations collection:
+    match /slotConfigurations/{configId} {
+      allow read, list: if request.auth != null; // Patients need to query these for available slots.
+      allow create, update, delete: if isAdmin(); // Admins manage slot configurations.
     }
 
-    // --- Your Original Default Deny Rule ---
+    // Tests collection (medical tests):
+    match /tests/{testId} {
+      allow read, list: if request.auth != null; // Authenticated users (patients/admins) can read/list tests.
+      allow create, update, delete: if isAdmin(); // Admins manage tests.
+    }
+
+    // Bills collection:
+    match /bills/{billId} {
+      // Patients can read/update their own bills. Admins can read/update any bill.
+      allow read, update: if request.auth != null && 
+                           ( (resource.data.patientId == request.auth.uid) || isAdmin() );
+      // Patients can list their own bills. Admins can list all bills.
+      allow list: if request.auth != null &&
+                     (
+                       (request.query.filters.size() > 0 && request.query.filters[0][0] == 'patientId' && request.query.filters[0][2] == request.auth.uid) ||
+                       isAdmin()
+                     );
+      // Creating/deleting bills is admin-only or system-driven.
+      allow create, delete: if isAdmin();
+    }
+
+    // Clinic Configuration collection (e.g., global settings):
+    // Assumes a single document, e.g., "globalClinicSettings".
+    match /clinicConfiguration/globalClinicSettings {
+      allow read: if request.auth != null; // Any authenticated user can read clinic settings.
+      allow write: if isAdmin(); // Only admins can change clinic settings (create/update/delete).
+    }
+
+    // Doctor Queue Status collection:
+    match /doctorQueueStatus/{doctorId} {
+      allow read: if request.auth != null; // Any authenticated user can read live queue status.
+      // Writing to queue status should be restricted (e.g., admins or specific doctor role).
+      allow write: if isAdmin(); 
+    }
+
+    // --- Default Deny Rule ---
     // This rule ensures that any path not explicitly matched above is denied.
-    // It's crucial for security if other collections are added without specific rules.
     match /{document=**} {
       allow read, write: if false;
     }
