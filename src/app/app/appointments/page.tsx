@@ -16,7 +16,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
-import { db, collection, getDocs, addDoc, serverTimestamp, query as firestoreQuery, where, orderBy, doc, Timestamp } from "@/lib/firebase";
+import { db, collection, getDocs, addDoc, serverTimestamp, query as firestoreQuery, where, orderBy, doc, Timestamp, limit } from "@/lib/firebase";
 
 const appointmentFormSchema = z.object({
   doctorId: z.string().min(1, "Please select a doctor."),
@@ -29,7 +29,7 @@ type AppointmentFormValues = z.infer<typeof appointmentFormSchema>;
 interface DoctorOption {
   id: string;
   name: string;
-  specialization: string; 
+  specialization: string;
 }
 
 interface TimeSlot {
@@ -48,7 +48,7 @@ interface BookedAppointment {
   date: string; // ISO String
   time: string; // Display time
   status: 'upcoming' | 'active' | 'completed' | 'cancelled';
-  type: string; 
+  type: string;
   patientId: string;
 }
 
@@ -59,7 +59,7 @@ export default function AppointmentsPage() {
   const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
   const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>([]);
   const [bookedAppointments, setBookedAppointments] = useState<BookedAppointment[]>([]);
-  
+
   const [isLoadingDoctors, setIsLoadingDoctors] = useState(true);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
   const [isLoadingBookedAppointments, setIsLoadingBookedAppointments] = useState(true);
@@ -75,7 +75,6 @@ export default function AppointmentsPage() {
   const fetchDoctors = useCallback(async () => {
     setIsLoadingDoctors(true);
     try {
-      // Assuming all doctors are relevant for booking. If specialization filter is needed, re-add it.
       const q = firestoreQuery(collection(db, "doctors"), orderBy("name"));
       const snapshot = await getDocs(q);
       const fetchedDoctors: DoctorOption[] = [];
@@ -93,9 +92,9 @@ export default function AppointmentsPage() {
     setIsLoadingBookedAppointments(true);
     try {
         const q = firestoreQuery(
-            collection(db, "appointments"), 
-            where("patientId", "==", patientId), 
-            orderBy("date", "desc"), 
+            collection(db, "appointments"),
+            where("patientId", "==", patientId),
+            orderBy("date", "desc"),
             orderBy("time", "desc")
         );
         const snapshot = await getDocs(q);
@@ -106,9 +105,9 @@ export default function AppointmentsPage() {
                 id: doc.id,
                 doctorName: data.doctorName,
                 date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
-                time: data.appointmentTimeDisplay || data.time, 
+                time: data.appointmentTimeDisplay || data.time,
                 status: data.status,
-                type: "In-Person", 
+                type: "In-Person",
                 patientId: data.patientId,
             });
         });
@@ -138,12 +137,11 @@ export default function AppointmentsPage() {
           const dayOfWeek = selectedDate.toLocaleDateString('en-US', { weekday: 'long' });
           const dateString = selectedDate.toISOString().split('T')[0];
 
-          // 1. Fetch slot configurations for the selected doctor and day
           const slotConfigsRef = collection(db, "slotConfigurations");
           const qConfigs = firestoreQuery(
             slotConfigsRef,
             where("doctorId", "==", selectedDoctorId),
-            where("dayOfWeek", "array-contains", dayOfWeek) // Use array-contains for array field
+            where("dayOfWeek", "array-contains", dayOfWeek)
           );
           const configSnapshot = await getDocs(qConfigs);
           if (configSnapshot.empty) {
@@ -153,8 +151,7 @@ export default function AppointmentsPage() {
           }
 
           const generatedSlots: TimeSlot[] = [];
-          
-          // 2. For each configuration, generate individual slots
+
           for (const confDoc of configSnapshot.docs) {
             const config = confDoc.data() as { startTime: string, endTime: string, slotDurationMinutes: number, capacityPerSlot: number };
             let current = new Date(`${dateString}T${config.startTime}:00`);
@@ -163,17 +160,17 @@ export default function AppointmentsPage() {
             while (current < end) {
               const slotStart = current;
               const slotEnd = new Date(slotStart.getTime() + config.slotDurationMinutes * 60000);
-              
-              if (slotEnd > end) break; 
+
+              if (slotEnd > end) break;
 
               const startTimeStr = `${slotStart.getHours().toString().padStart(2,'0')}:${slotStart.getMinutes().toString().padStart(2,'0')}`;
-              
+
               generatedSlots.push({
-                id: `${startTimeStr}_${confDoc.id}`, 
+                id: `${startTimeStr}_${confDoc.id}`,
                 time: `${startTimeStr} - ${slotEnd.getHours().toString().padStart(2,'0')}:${slotEnd.getMinutes().toString().padStart(2,'0')}`,
-                available: true, 
+                available: true,
                 capacity: config.capacityPerSlot,
-                booked: 0, 
+                booked: 0,
                 slotConfigId: confDoc.id,
                 startTime: startTimeStr,
               });
@@ -181,13 +178,13 @@ export default function AppointmentsPage() {
             }
           }
 
-          // 3. Fetch existing bookings for this doctor on this date to update slot availability/booked counts
           if (generatedSlots.length > 0) {
             const appointmentsRef = collection(db, "appointments");
             const qBookings = firestoreQuery(
                 appointmentsRef,
                 where("doctorId", "==", selectedDoctorId),
-                where("date", "==", dateString)
+                where("date", "==", dateString),
+                limit(300) // Added limit to comply with potential security rule requirements
             );
             const bookingsSnapshot = await getDocs(qBookings);
             const bookingsOnDate = bookingsSnapshot.docs.map(d => d.data());
@@ -201,9 +198,13 @@ export default function AppointmentsPage() {
             });
           }
           setAvailableSlots(generatedSlots);
-        } catch (error) {
+        } catch (error: any) {
           console.error("Error generating/fetching slots:", error);
-          toast({ variant: "destructive", title: "Error", description: "Could not load available slots." });
+          if (error.code) {
+            console.error("Firebase error code:", error.code);
+            console.error("Firebase error message:", error.message);
+          }
+          toast({ variant: "destructive", title: "Slot Loading Error", description: `Could not load available slots. ${error.message || 'Please try again.'}` });
         } finally {
           setIsLoadingSlots(false);
         }
@@ -233,7 +234,7 @@ export default function AppointmentsPage() {
       setIsSubmitting(false);
       return;
     }
-    
+
     if (selectedSlot.booked >= selectedSlot.capacity) {
         toast({ variant: "destructive", title: "Booking Failed", description: "Selected time slot is full. Please choose another."});
         setIsSubmitting(false);
@@ -247,25 +248,25 @@ export default function AppointmentsPage() {
         doctorId: doctor.id,
         doctorName: doctor.name,
         specialization: doctor.specialization,
-        date: selectedDate.toISOString().split('T')[0], 
-        time: selectedSlot.startTime, 
-        appointmentTime: selectedSlot.startTime, 
-        appointmentTimeDisplay: selectedSlot.time, 
+        date: selectedDate.toISOString().split('T')[0],
+        time: selectedSlot.startTime,
+        appointmentTime: selectedSlot.startTime,
+        appointmentTimeDisplay: selectedSlot.time,
         slotConfigId: selectedSlot.slotConfigId,
-        status: 'upcoming', 
+        status: 'upcoming',
         createdAt: serverTimestamp(),
       };
       await addDoc(collection(db, "appointments"), appointmentData);
-      
+
       toast({
         title: "Appointment Booked!",
         description: `Your appointment with ${doctor.name} on ${selectedDate.toLocaleDateString()} at ${selectedSlot.time} is confirmed.`,
         action: <CheckCircle className="text-green-500" />,
       });
-      reset(); 
+      reset();
       setSelectedDoctorId(null);
       setAvailableSlots([]);
-      fetchBookedAppointments(user.uid); 
+      if (user.uid) fetchBookedAppointments(user.uid);
     } catch (error: any) {
         console.error("Error booking appointment: ", error);
         toast({ variant: "destructive", title: "Booking Error", description: error.message || "Could not book appointment."});
@@ -338,7 +339,7 @@ export default function AppointmentsPage() {
                               mode="single"
                               selected={field.value}
                               onSelect={(date) => { field.onChange(date); setValue("timeSlotId", ""); setAvailableSlots([]); }}
-                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate())) } 
+                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate())) }
                               initialFocus
                               className="rounded-md border self-start"
                             />
@@ -381,7 +382,7 @@ export default function AppointmentsPage() {
                       )}
                     />
                   )}
-                  
+
                   <Button type="submit" className="w-full md:w-auto bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isSubmitting || !selectedDoctorId || !selectedDate || !watch("timeSlotId") || isLoadingSlots || user?.isBlocked}>
                     {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin"/>Booking...</> : (user?.isBlocked ? "Booking Restricted" : "Book Appointment")}
                   </Button>
@@ -408,7 +409,7 @@ export default function AppointmentsPage() {
                         <div>
                           <h3 className="font-semibold text-primary">{appt.doctorName}</h3>
                           <p className="text-sm text-muted-foreground">
-                            {new Date(appt.date).toLocaleDateString()} at {appt.time} 
+                            {new Date(appt.date).toLocaleDateString()} at {appt.time}
                           </p>
                            <p className="text-xs">Type: <span className="inline-flex items-center"><Users className="w-3 h-3 mr-1"/>In-Person</span></p>
                         </div>
@@ -441,6 +442,3 @@ export default function AppointmentsPage() {
     </div>
   );
 }
-
-
-    
