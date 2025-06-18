@@ -6,40 +6,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { PlusCircle, Edit, Trash2, UserPlus, Eye, Users as UsersIcon, Loader2, Clock, Briefcase } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
-import { useForm, Controller } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import * as z from "zod";
 import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, orderBy, query as firestoreQuery } from "@/lib/firebase";
-
-const generateTimeSlots = (startHour: number, endHour: number, intervalMinutes: number): { id: string, label: string }[] => {
-  const slots = [];
-  const startTime = new Date();
-  startTime.setHours(startHour, 0, 0, 0); 
-
-  const endTime = new Date();
-  endTime.setHours(endHour, 0, 0, 0); 
-
-  let currentTime = new Date(startTime);
-
-  while (currentTime.getHours() < endHour || (currentTime.getHours() === endHour -1 && currentTime.getMinutes() < (60-intervalMinutes+1)) ) {
-    if(currentTime.getHours() >= endHour && currentTime.getMinutes() > 0) break; 
-
-    const hours = currentTime.getHours().toString().padStart(2, '0');
-    const minutes = currentTime.getMinutes().toString().padStart(2, '0');
-    const timeString = `${hours}:${minutes}`;
-    slots.push({ id: timeString, label: timeString });
-    currentTime.setMinutes(currentTime.getMinutes() + intervalMinutes);
-    if(currentTime.getHours() === endHour && currentTime.getMinutes() === 0) break; 
-  }
-  return slots;
-};
-
-const availableTimeSlotsOptions = generateTimeSlots(9, 17, 15); // 9:00 AM up to 4:45 PM for 5 PM exclusive end
 
 const doctorFormSchema = z.object({
   id: z.string().optional(),
@@ -47,8 +21,18 @@ const doctorFormSchema = z.object({
   email: z.string().email("Invalid email address."),
   experience: z.coerce.number().min(0, "Experience cannot be negative.").default(0),
   phoneNumber: z.string().regex(/^\d{10}$/, "Phone number must be 10 digits.").optional().or(z.literal('')),
-  availabilitySlots: z.array(z.string()).min(1, { message: "Please select at least one availability slot." }),
+  availabilityStartTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid start time (HH:MM format)."),
+  availabilityEndTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid end time (HH:MM format)."),
+}).refine(data => {
+    if (data.availabilityStartTime && data.availabilityEndTime) {
+        return data.availabilityStartTime < data.availabilityEndTime;
+    }
+    return true; // Pass if one or both are not yet defined (during initial form fill)
+}, {
+  message: "End time must be after start time.",
+  path: ["availabilityEndTime"],
 });
+
 
 type DoctorFormValues = z.infer<typeof doctorFormSchema>;
 
@@ -67,7 +51,14 @@ export default function ManageDoctorsPage() {
 
   const form = useForm<DoctorFormValues>({
     resolver: zodResolver(doctorFormSchema),
-    defaultValues: { name: "", email: "", experience: 0, phoneNumber: "", availabilitySlots: [] },
+    defaultValues: { 
+        name: "", 
+        email: "", 
+        experience: 0, 
+        phoneNumber: "", 
+        availabilityStartTime: "09:00", 
+        availabilityEndTime: "18:00" 
+    },
   });
 
   const fetchDoctors = useCallback(async () => {
@@ -100,11 +91,19 @@ export default function ManageDoctorsPage() {
         ...doctor,
         experience: doctor.experience ?? 0,
         phoneNumber: doctor.phoneNumber ?? "",
-        availabilitySlots: doctor.availabilitySlots || []
+        availabilityStartTime: doctor.availabilityStartTime || "09:00",
+        availabilityEndTime: doctor.availabilityEndTime || "18:00",
       });
     } else {
       setEditingDoctor(null);
-      form.reset({ name: "", email: "", experience: 0, phoneNumber: "", availabilitySlots: [] });
+      form.reset({ 
+          name: "", 
+          email: "", 
+          experience: 0, 
+          phoneNumber: "", 
+          availabilityStartTime: "09:00", 
+          availabilityEndTime: "18:00" 
+      });
     }
     setIsDialogOpen(true);
   };
@@ -180,7 +179,7 @@ export default function ManageDoctorsPage() {
                 <TableHead>Email</TableHead>
                 <TableHead>Experience (Years)</TableHead>
                 <TableHead>Phone</TableHead>
-                <TableHead>Availability Slots</TableHead>
+                <TableHead>General Availability</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -191,8 +190,10 @@ export default function ManageDoctorsPage() {
                   <TableCell>{doctor.email}</TableCell>
                   <TableCell>{doctor.experience !== undefined ? doctor.experience : 'N/A'}</TableCell>
                   <TableCell>{doctor.phoneNumber || 'N/A'}</TableCell>
-                  <TableCell className="max-w-xs truncate">
-                    {(doctor.availabilitySlots && doctor.availabilitySlots.length > 0) ? doctor.availabilitySlots.join(', ') : 'Not Set'}
+                  <TableCell>
+                    {doctor.availabilityStartTime && doctor.availabilityEndTime
+                      ? `${doctor.availabilityStartTime} - ${doctor.availabilityEndTime}`
+                      : 'Not Set'}
                   </TableCell>
                   <TableCell className="text-right space-x-2">
                     <Button variant="ghost" size="icon" onClick={() => toast({title: "View Doctor", description: "View doctor details not implemented."})}>
@@ -214,7 +215,7 @@ export default function ManageDoctorsPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editingDoctor ? "Edit Doctor" : "Add New Doctor"}</DialogTitle>
             <DialogDescription>
@@ -267,56 +268,36 @@ export default function ManageDoctorsPage() {
                   </FormItem>
                 )}
               />
-              <FormField
-                control={form.control}
-                name="availabilitySlots"
-                render={({ field }) => (
-                  <FormItem>
-                    <div className="mb-2">
-                        <FormLabel className="text-base flex items-center"><Clock className="mr-2 h-4 w-4"/>Available Time Slots</FormLabel>
-                        <FormDescription>
-                            Select general daily availability. Specific recurring schedules are managed in "Manage Slots".
-                        </FormDescription>
-                    </div>
-                    <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-2 p-2 border rounded-md max-h-60 overflow-y-auto">
-                      {availableTimeSlotsOptions.map((slot) => (
-                        <FormField
-                          key={slot.id}
-                          control={form.control}
-                          name="availabilitySlots"
-                          render={({ field: slotField }) => {
-                            return (
-                              <FormItem
-                                key={slot.id}
-                                className="flex flex-row items-center space-x-2 space-y-0 bg-secondary/30 p-2 rounded"
-                              >
-                                <FormControl>
-                                  <Checkbox
-                                    checked={slotField.value?.includes(slot.id)}
-                                    onCheckedChange={(checked) => {
-                                      return checked
-                                        ? slotField.onChange([...(slotField.value || []), slot.id])
-                                        : slotField.onChange(
-                                            (slotField.value || []).filter(
-                                              (value) => value !== slot.id
-                                            )
-                                          );
-                                    }}
-                                  />
-                                </FormControl>
-                                <FormLabel className="text-sm font-normal whitespace-nowrap">
-                                  {slot.label}
-                                </FormLabel>
-                              </FormItem>
-                            );
-                          }}
-                        />
-                      ))}
-                    </div>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              
+              <FormItem>
+                <FormLabel className="flex items-center"><Clock className="mr-2 h-4 w-4"/>General Daily Availability</FormLabel>
+                <FormDescription>Define the doctor's typical daily start and end working hours.</FormDescription>
+                <div className="grid grid-cols-2 gap-4 mt-2">
+                    <FormField
+                    control={form.control}
+                    name="availabilityStartTime"
+                    render={({ field }) => (
+                        <FormItem>
+                        <FormLabel>Start Time</FormLabel>
+                        <FormControl><Input type="time" {...field} /></FormControl>
+                        <FormMessage />
+                        </FormItem>
+                    )}
+                    />
+                    <FormField
+                    control={form.control}
+                    name="availabilityEndTime"
+                    render={({ field }) => (
+                        <FormItem>
+                        <FormLabel>End Time</FormLabel>
+                        <FormControl><Input type="time" {...field} /></FormControl>
+                        <FormMessage />
+                        </FormItem>
+                    )}
+                    />
+                </div>
+              </FormItem>
+
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
                 <Button type="submit" className="bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isSubmitting}>
@@ -330,4 +311,3 @@ export default function ManageDoctorsPage() {
     </div>
   );
 }
-
