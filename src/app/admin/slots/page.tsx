@@ -14,7 +14,7 @@ import { PlusCircle, Edit, Trash2, CalendarClock, Loader2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
-import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, query as firestoreQuery, orderBy } from "@/lib/firebase";
+import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, query as firestoreQuery, orderBy, where } from "@/lib/firebase";
 
 const daysOfWeek = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -60,7 +60,8 @@ export default function ManageSlotsPage() {
 
   const fetchDoctors = useCallback(async () => {
     try {
-      const doctorsSnapshot = await getDocs(firestoreQuery(collection(db, "doctors"), where("specialization", "==", "Gynecology"), orderBy("name")));
+      // Fetching all doctors now, as specialization was removed from doctor entity
+      const doctorsSnapshot = await getDocs(firestoreQuery(collection(db, "doctors"), orderBy("name")));
       const fetchedDoctors: DoctorOption[] = [];
       doctorsSnapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, name: doc.data().name }));
       setDoctors(fetchedDoctors);
@@ -163,7 +164,7 @@ export default function ManageSlotsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Manage Doctor Slots" description="Define Gynecologists' availability schedules and slot capacities.">
+      <PageHeader title="Manage Doctor Slots" description="Define doctors' availability schedules and slot capacities.">
         <Button onClick={() => handleDialogOpen()} disabled={doctors.length === 0}>
           <PlusCircle className="mr-2 h-4 w-4" /> Add Slot Configuration
         </Button>
@@ -171,7 +172,7 @@ export default function ManageSlotsPage() {
       {doctors.length === 0 && !isLoading && (
         <Card>
             <CardContent className="pt-6 text-center text-muted-foreground">
-                <p>Please add doctors (Gynecologists) in the "Manage Doctors" section before configuring slots.</p>
+                <p>Please add doctors in the "Manage Doctors" section before configuring slots.</p>
             </CardContent>
         </Card>
       )}
@@ -179,7 +180,7 @@ export default function ManageSlotsPage() {
        <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Slot Configurations</CardTitle>
-          <CardDescription>List of defined availability schedules for Gynecologists.</CardDescription>
+          <CardDescription>List of defined availability schedules for doctors.</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading && slotConfigs.length === 0 ? (
@@ -233,7 +234,7 @@ export default function ManageSlotsPage() {
           <DialogHeader>
             <DialogTitle>{editingSlotConfig ? "Edit Slot Configuration" : "Add New Slot Configuration"}</DialogTitle>
             <DialogDescription>
-              Define a recurring availability block for a Gynecologist. Max 15 patients per generated slot.
+              Define a recurring availability block for a doctor. Max 15 patients per generated slot.
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -245,7 +246,7 @@ export default function ManageSlotsPage() {
                   <FormItem>
                     <FormLabel>Doctor</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select a Gynecologist" /></SelectTrigger></FormControl>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select a doctor" /></SelectTrigger></FormControl>
                       <SelectContent>
                         {doctors.map(doc => <SelectItem key={doc.id} value={doc.id}>{doc.name}</SelectItem>)}
                       </SelectContent>
@@ -330,3 +331,4 @@ export default function ManageSlotsPage() {
     </div>
   );
 }
+
