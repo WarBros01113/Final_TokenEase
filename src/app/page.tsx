@@ -1,3 +1,4 @@
+
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Stethoscope, Users, UserCog, LogIn } from "lucide-react";
@@ -104,7 +105,7 @@ function FeatureCard({ icon, title, description, imageSrc, dataAiHint }: Feature
         <CardTitle className="text-primary font-headline">{title}</CardTitle>
       </CardHeader>
       <div className="relative h-48 w-full">
-        <Image src={imageSrc} alt={title} layout="fill" objectFit="cover" data-ai-hint={dataAiHint} />
+        <Image src={imageSrc} alt={title} fill={true} className="object-cover" data-ai-hint={dataAiHint} />
       </div>
       <CardContent className="pt-4 text-center">
         <CardDescription>{description}</CardDescription>
