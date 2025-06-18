@@ -56,7 +56,7 @@ const timeSlotCheckboxOptions = generateTimeSlotCheckboxOptions();
 const slotFormSchema = z.object({
   id: z.string().optional(),
   doctorId: z.string().min(1, "Doctor is required."),
-  dayOfWeek: z.string().min(1, "Day of the week is required."),
+  dayOfWeek: z.array(z.string()).nonempty({ message: "Please select at least one day of the week." }),
   selectedSlots: z.array(z.string()).nonempty({ message: "Please select at least one time slot." }),
   capacityPerSlot: z.coerce.number().min(1, "Capacity must be at least 1.").max(15, "Capacity cannot exceed 15."),
 });
@@ -91,7 +91,7 @@ export default function ManageSlotsPage() {
 
   const form = useForm<SlotFormValues>({
     resolver: zodResolver(slotFormSchema),
-    defaultValues: { doctorId: "", dayOfWeek: "Monday", selectedSlots: [], capacityPerSlot: 1 },
+    defaultValues: { doctorId: "", dayOfWeek: [], selectedSlots: [], capacityPerSlot: 1 },
   });
 
   const fetchDoctors = useCallback(async () => {
@@ -118,21 +118,20 @@ export default function ManageSlotsPage() {
     if(doctors.length > 0) {
         setIsSlotConfigLoading(true);
         try {
-          const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId", "asc"), orderBy("dayOfWeek", "asc")));
+          // Removed orderBy("dayOfWeek", "asc") as it's not effective for array fields
+          const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId", "asc")));
           const newConfigs: SlotConfig[] = [];
           const doctorNameMap = new Map(doctors.map(d => [d.id, d.name]));
 
           slotsSnapshot.forEach(docSnap => {
             const data = docSnap.data();
-            let dayOfWeekValue: string = "Monday"; 
-
-            if (typeof data.dayOfWeek === 'string' && data.dayOfWeek) {
-                dayOfWeekValue = data.dayOfWeek;
-            } else if (Array.isArray(data.dayOfWeek) && data.dayOfWeek.length > 0 && typeof data.dayOfWeek[0] === 'string') {
-                dayOfWeekValue = data.dayOfWeek[0];
-                console.warn(`Slot config ${docSnap.id} uses legacy array for dayOfWeek. Using first day: ${dayOfWeekValue}`);
-            } else if (data.dayOfWeek) { 
-                 console.warn(`Slot config ${docSnap.id} has an invalid dayOfWeek format: ${typeof data.dayOfWeek}. Defaulting to Monday.`);
+            
+            let dayOfWeekValue: string[] = []; 
+            const rawDayOfWeek = data.dayOfWeek;
+            if (Array.isArray(rawDayOfWeek)) {
+                dayOfWeekValue = rawDayOfWeek.filter(day => typeof day === 'string');
+            } else if (typeof rawDayOfWeek === 'string' && rawDayOfWeek) {
+                dayOfWeekValue = [rawDayOfWeek]; // Convert legacy string to array
             }
             
             newConfigs.push({
@@ -147,9 +146,9 @@ export default function ManageSlotsPage() {
           setSlotConfigs(newConfigs);
         } catch (error: any) {
           console.error("Error fetching slot configurations: ", error);
-          toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations. A new Firestore index might be required. Check console for details.", duration: 10000 });
+          toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations. A new Firestore index might be required on 'doctorId'. Check console for details.", duration: 10000 });
           if (error.message && error.message.includes("firestore/failed-precondition")) {
-            console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message or create it manually: collection 'slotConfigurations', fields: 'doctorId' (Ascending), 'dayOfWeek' (Ascending).");
+            console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message or create it manually: collection 'slotConfigurations', field: 'doctorId' (Ascending).");
           }
         } finally {
           setIsSlotConfigLoading(false);
@@ -174,14 +173,20 @@ export default function ManageSlotsPage() {
   const handleFormDialogOpen = (slotConfig?: SlotConfig) => {
     if (slotConfig) {
       setEditingSlotConfig(slotConfig);
+      let daysToSet: string[] = [];
+      if (Array.isArray(slotConfig.dayOfWeek)) {
+        daysToSet = slotConfig.dayOfWeek;
+      } else if (typeof slotConfig.dayOfWeek === 'string') {
+        daysToSet = [slotConfig.dayOfWeek]; // Handle legacy string data
+      }
       form.reset({
         ...slotConfig, 
-        dayOfWeek: typeof slotConfig.dayOfWeek === 'string' ? slotConfig.dayOfWeek : "Monday", 
+        dayOfWeek: daysToSet, 
         selectedSlots: Array.isArray(slotConfig.selectedSlots) ? slotConfig.selectedSlots : []
       });
     } else {
       setEditingSlotConfig(null);
-      form.reset({ doctorId: "", dayOfWeek: "Monday", selectedSlots: [], capacityPerSlot: 1 });
+      form.reset({ doctorId: "", dayOfWeek: [], selectedSlots: [], capacityPerSlot: 1 });
     }
     setIsFormDialogOpen(true);
   };
@@ -283,7 +288,7 @@ export default function ManageSlotsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Doctor</TableHead>
-                <TableHead>Day</TableHead>
+                <TableHead>Days</TableHead>
                 <TableHead>Selected Slots</TableHead>
                 <TableHead>Capacity/Slot</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -293,9 +298,9 @@ export default function ManageSlotsPage() {
               {slotConfigs.map((sc) => (
                 <TableRow key={sc.id}>
                   <TableCell className="font-medium">{sc.doctorName || sc.doctorId}</TableCell>
-                  <TableCell>{sc.dayOfWeek}</TableCell>
+                  <TableCell>{sc.dayOfWeek.join(', ')}</TableCell>
                   <TableCell>
-                    {sc.selectedSlots.length > 0 ? `${sc.selectedSlots.length} slots (e.g., ${sc.selectedSlots[0]})` : 'None'}
+                    {sc.selectedSlots.length > 0 ? `${sc.selectedSlots.length} slots (e.g., ${sc.selectedSlots.sort()[0]})` : 'None'}
                   </TableCell>
                   <TableCell>{sc.capacityPerSlot} patients</TableCell>
                   <TableCell className="text-right space-x-2">
@@ -319,7 +324,7 @@ export default function ManageSlotsPage() {
           <DialogHeader>
             <DialogTitle>{editingSlotConfig ? "Edit Slot Configuration" : "Add New Slot Configuration"}</DialogTitle>
             <DialogDescription>
-              Select specific 15-minute time slots for a doctor on a particular day. Max 15 patients per individual slot.
+              Select applicable days, then specific 15-minute time slots for a doctor. Max 15 patients per individual slot.
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -343,15 +348,39 @@ export default function ManageSlotsPage() {
               <FormField
                 control={form.control}
                 name="dayOfWeek"
-                render={({ field }) => (
+                render={() => ( // No field needed directly here, use form.getValues/setValue
                   <FormItem>
-                    <FormLabel>Day of Week</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select a day" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {daysOfWeekOptions.map(day => <SelectItem key={day.id} value={day.id}>{day.label}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <div className="mb-2">
+                      <FormLabel className="text-base">Days of Week</FormLabel>
+                      <FormDescription>
+                        Select the days this slot configuration applies to.
+                      </FormDescription>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-2 border rounded-md">
+                      {daysOfWeekOptions.map((dayOption) => (
+                        <FormItem
+                          key={dayOption.id}
+                          className="flex flex-row items-start space-x-3 space-y-0 bg-secondary/30 p-2 rounded"
+                        >
+                          <FormControl>
+                            <Checkbox
+                              checked={form.watch("dayOfWeek")?.includes(dayOption.id)}
+                              onCheckedChange={(checked) => {
+                                const currentDays = form.getValues("dayOfWeek") || [];
+                                if (checked) {
+                                  form.setValue("dayOfWeek", [...currentDays, dayOption.id].sort(), { shouldValidate: true });
+                                } else {
+                                  form.setValue("dayOfWeek", currentDays.filter(day => day !== dayOption.id).sort(), { shouldValidate: true });
+                                }
+                              }}
+                            />
+                          </FormControl>
+                          <FormLabel className="font-normal">
+                            {dayOption.label}
+                          </FormLabel>
+                        </FormItem>
+                      ))}
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -365,7 +394,7 @@ export default function ManageSlotsPage() {
                     <div className="mb-2">
                       <FormLabel className="text-base flex items-center"><CalendarDays className="mr-2 h-4 w-4"/>Select Available 15-Minute Slots</FormLabel>
                       <FormDescription>
-                        Check the boxes for time slots the doctor will be available. (9:00 AM - 5:45 PM)
+                        Check the boxes for time slots the doctor will be available (9:00 AM - 5:45 PM). Applies to all selected days.
                       </FormDescription>
                     </div>
                     <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2 border rounded-md max-h-60 overflow-y-auto">
@@ -384,7 +413,7 @@ export default function ManageSlotsPage() {
                                     : field.onChange(
                                         currentValue.filter(
                                         (value) => value !== slotOption.id
-                                        )
+                                        ).sort()
                                     );
                                 }}
                             />
@@ -447,3 +476,4 @@ export default function ManageSlotsPage() {
   );
 }
 
+    
