@@ -1,4 +1,21 @@
-// This file is intentionally left blank as it's being removed.
-// If this file persists after the operation, please delete it manually.
-// The dedicated admin login page is no longer needed.
-// Admins will log in through the main /login page.
+
+"use client";
+
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { Loader2 } from 'lucide-react';
+
+export default function AdminLoginPageRedirect() {
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace('/login');
+  }, [router]);
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-background">
+      <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
+      <p className="text-muted-foreground">Redirecting to login...</p>
+    </div>
+  );
+}
