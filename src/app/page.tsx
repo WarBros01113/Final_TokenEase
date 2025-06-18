@@ -16,9 +16,7 @@ export default function HomePage() {
             <Button variant="ghost" asChild>
               <Link href="/login">Patient Login</Link>
             </Button>
-            <Button variant="outline" asChild>
-              <Link href="/admin/login">Admin Login</Link>
-            </Button>
+            {/* Admin Login button removed */}
           </nav>
         </div>
       </header>
@@ -68,11 +66,11 @@ export default function HomePage() {
                 dataAiHint="queue management"
               />
               <FeatureCard
-                icon={<UserCog className="w-10 h-10 text-accent" />}
-                title="Doctor-Patient Chat"
-                description="Communicate securely with your doctor for quick queries or follow-ups. Share files if needed."
+                icon={<UserCog className="w-10 h-10 text-accent" />} // Icon kept, description can be updated later if needed
+                title="Secure Account Management" // Title changed from "Doctor-Patient Chat"
+                description="Manage your profile, view billing history, and control your notification settings securely." // Description changed
                 imageSrc="https://placehold.co/600x400.png"
-                dataAiHint="online consultation"
+                dataAiHint="profile settings" // data-ai-hint updated
               />
             </div>
           </div>

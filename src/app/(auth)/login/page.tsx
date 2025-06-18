@@ -1,3 +1,4 @@
+
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -46,17 +47,21 @@ export default function LoginPage() {
   async function onSubmit(values: LoginFormValues) {
     setIsLoading(true);
     try {
-      await signIn(values.email, values.password);
+      const { role } = await signIn(values.email, values.password);
       toast({
         title: "Login Successful",
         description: "Welcome back!",
       });
-      router.push("/app/dashboard"); // Redirect to patient dashboard
+      if (role === 'admin') {
+        router.push("/admin/dashboard");
+      } else {
+        router.push("/app/dashboard"); 
+      }
     } catch (error: any) {
       toast({
         variant: "destructive",
         title: "Login Failed",
-        description: error.message || "An unknown error occurred. Please try again.",
+        description: error.message || "Invalid credentials. Please try again.",
       });
     } finally {
       setIsLoading(false);
@@ -65,8 +70,8 @@ export default function LoginPage() {
 
   return (
     <AuthFormWrapper
-      title="Patient Login"
-      description="Access your TokenEase patient account."
+      title="User Login" // Title made more generic
+      description="Access your TokenEase account." // Description made more generic
       footerContent={
         <>
           Don't have an account?{" "}

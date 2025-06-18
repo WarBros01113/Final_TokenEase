@@ -42,7 +42,7 @@ interface NavItem {
 interface AuthenticatedLayoutProps {
   children: React.ReactNode;
   navItems: NavItem[];
-  userRole: 'patient' | 'admin'; // To differentiate dashboard links
+  userRole: 'patient' | 'admin'; 
 }
 
 export function AuthenticatedLayout({ children, navItems, userRole }: AuthenticatedLayoutProps) {
@@ -51,12 +51,12 @@ export function AuthenticatedLayout({ children, navItems, userRole }: Authentica
 
   useEffect(() => {
     if (!loading && !user) {
-      router.push(userRole === 'admin' ? '/admin/login' : '/login');
+      router.push('/login'); // All users (admin or patient) redirect to /login if not authenticated
     }
     // Check if the role matches the expected role for this layout
     if (!loading && user && role !== userRole) {
-      signOut(); // Log out if role mismatch
-      router.push('/'); // Redirect to home
+      signOut(); 
+      router.push('/'); 
     }
   }, [user, role, loading, router, userRole, signOut]);
 
@@ -105,7 +105,7 @@ export function AuthenticatedLayout({ children, navItems, userRole }: Authentica
       <SidebarInset>
         <div className="flex flex-col min-h-screen">
           <header className="sticky top-0 z-40 flex h-16 items-center justify-between gap-4 border-b bg-background/80 backdrop-blur-md px-6">
-            <SidebarTrigger className="md:hidden" /> {/* Hidden on md and up if sidebar is there */}
+            <SidebarTrigger className="md:hidden" /> 
             <div className="flex-1">
               {/* Optional: Breadcrumbs or page title here */}
             </div>
