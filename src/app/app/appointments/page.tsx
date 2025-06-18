@@ -34,7 +34,7 @@ interface DoctorOption {
 
 interface TimeSlot {
   id: string; // Composite: "startTime_slotConfigId" e.g., "09:00_cfg123"
-  time: string; // Display time e.g., "09:00 AM - 09:30 AM"
+  time: string; // Display time e.g., "09:00 AM - 09:15 AM" (now always 15min)
   available: boolean;
   capacity: number;
   booked: number;
@@ -47,9 +47,10 @@ interface BookedAppointment {
   doctorName: string;
   date: string; // ISO String
   time: string; // Display time
-  status: 'upcoming' | 'active' | 'completed' | 'cancelled';
+  status: 'upcoming' | 'active' | 'completed' | 'cancelled' | 'delayed';
   type: string;
   patientId: string;
+  tokenNumber?: number;
 }
 
 export default function AppointmentsPage() {
@@ -107,8 +108,9 @@ export default function AppointmentsPage() {
                 date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
                 time: data.appointmentTimeDisplay || data.time,
                 status: data.status,
-                type: "In-Person", // Assuming all are in-person for now
+                type: "In-Person", 
                 patientId: data.patientId,
+                tokenNumber: data.tokenNumber,
             });
         });
         setBookedAppointments(fetched);
@@ -138,12 +140,14 @@ export default function AppointmentsPage() {
           const dateString = selectedDate.toISOString().split('T')[0];
 
           const slotConfigsRef = collection(db, "slotConfigurations");
+          // Query for slot configurations for the selected doctor that include the selected day of the week
           const qConfigs = firestoreQuery(
             slotConfigsRef,
             where("doctorId", "==", selectedDoctorId),
-            where("dayOfWeek", "array-contains", dayOfWeek)
+            where("dayOfWeek", "array-contains", dayOfWeek) // Use array-contains for multi-day configs
           );
           const configSnapshot = await getDocs(qConfigs);
+
           if (configSnapshot.empty) {
             setAvailableSlots([]);
             setIsLoadingSlots(false);
@@ -153,28 +157,25 @@ export default function AppointmentsPage() {
           const generatedSlots: TimeSlot[] = [];
 
           for (const confDoc of configSnapshot.docs) {
-            const config = confDoc.data() as { startTime: string, endTime: string, slotDurationMinutes: number, capacityPerSlot: number };
-            let current = new Date(`${dateString}T${config.startTime}:00`);
-            const end = new Date(`${dateString}T${config.endTime}:00`);
+            const configData = confDoc.data() as { selectedSlots: string[], capacityPerSlot: number };
+            if (configData.selectedSlots && Array.isArray(configData.selectedSlots)) {
+              configData.selectedSlots.forEach(slotTime => { // slotTime is "HH:MM"
+                const [hours, minutes] = slotTime.split(':').map(Number);
+                const slotStartTime = new Date(selectedDate);
+                slotStartTime.setHours(hours, minutes, 0, 0);
 
-            while (current < end) {
-              const slotStart = current;
-              const slotEnd = new Date(slotStart.getTime() + config.slotDurationMinutes * 60000);
+                const slotEndTime = new Date(slotStartTime.getTime() + 15 * 60000); // 15 minutes slot
 
-              if (slotEnd > end) break;
-
-              const startTimeStr = `${slotStart.getHours().toString().padStart(2,'0')}:${slotStart.getMinutes().toString().padStart(2,'0')}`;
-
-              generatedSlots.push({
-                id: `${startTimeStr}_${confDoc.id}`,
-                time: `${startTimeStr} - ${slotEnd.getHours().toString().padStart(2,'0')}:${slotEnd.getMinutes().toString().padStart(2,'0')}`,
-                available: true,
-                capacity: config.capacityPerSlot,
-                booked: 0,
-                slotConfigId: confDoc.id,
-                startTime: startTimeStr,
+                generatedSlots.push({
+                  id: `${slotTime}_${confDoc.id}`, // e.g. "09:00_configId123"
+                  time: `${slotTime} - ${String(slotEndTime.getHours()).padStart(2, '0')}:${String(slotEndTime.getMinutes()).padStart(2, '0')}`,
+                  available: true,
+                  capacity: configData.capacityPerSlot,
+                  booked: 0, // Will be updated below
+                  slotConfigId: confDoc.id,
+                  startTime: slotTime, // "HH:MM"
+                });
               });
-              current = slotEnd;
             }
           }
 
@@ -184,7 +185,7 @@ export default function AppointmentsPage() {
                 appointmentsRef,
                 where("doctorId", "==", selectedDoctorId),
                 where("date", "==", dateString),
-                limit(300) // This limit is important for the security rule
+                limit(300) 
             );
             const bookingsSnapshot = await getDocs(qBookings);
             const bookingsOnDate = bookingsSnapshot.docs.map(d => d.data());
@@ -242,6 +243,30 @@ export default function AppointmentsPage() {
     }
 
     try {
+      // Generate token number by counting existing appointments for this exact slot
+      const tokenQuery = firestoreQuery(
+        collection(db, "appointments"),
+        where("doctorId", "==", doctor.id),
+        where("date", "==", selectedDate.toISOString().split('T')[0]),
+        where("appointmentTime", "==", selectedSlot.startTime),
+        where("slotConfigId", "==", selectedSlot.slotConfigId)
+      );
+      const tokenQuerySnapshot = await getDocs(tokenQuery);
+      const tokenNumber = tokenQuerySnapshot.size + 1;
+
+      if (tokenNumber > selectedSlot.capacity) {
+        toast({ variant: "destructive", title: "Booking Failed", description: "Selected time slot just became full. Please choose another."});
+        setIsSubmitting(false);
+        // Optionally, refresh slots here
+        if (selectedDoctorId && selectedDate && user) { // Re-run slot fetching logic
+             setValue("timeSlotId", ""); // Clear selection
+             // This effect will re-trigger:
+             // To force re-fetch, you might need to slightly change a dependency or call fetchSlots directly
+        }
+        return;
+      }
+
+
       const appointmentData = {
         patientId: user.uid,
         patientName: user.displayName || user.fullName,
@@ -249,24 +274,25 @@ export default function AppointmentsPage() {
         doctorName: doctor.name,
         specialization: doctor.specialization,
         date: selectedDate.toISOString().split('T')[0],
-        time: selectedSlot.startTime, // Storing HH:MM
-        appointmentTime: selectedSlot.startTime, // Storing HH:MM, consistent with dashboard
-        appointmentTimeDisplay: selectedSlot.time, // Storing "HH:MM - HH:MM"
+        time: selectedSlot.startTime, 
+        appointmentTime: selectedSlot.startTime, 
+        appointmentTimeDisplay: selectedSlot.time, 
         slotConfigId: selectedSlot.slotConfigId,
         status: 'upcoming',
+        tokenNumber: tokenNumber, // Add generated token number
         createdAt: serverTimestamp(),
       };
       const newApptRef = await addDoc(collection(db, "appointments"), appointmentData);
 
       toast({
         title: "Appointment Booked!",
-        description: `Your appointment with ${doctor.name} on ${selectedDate.toLocaleDateString()} at ${selectedSlot.time} is confirmed.`,
+        description: `Your appointment with ${doctor.name} on ${selectedDate.toLocaleDateString()} at ${selectedSlot.time} (Token: ${tokenNumber}) is confirmed.`,
         action: <CheckCircle className="text-green-500" />,
       });
       reset();
       setSelectedDoctorId(null);
       setAvailableSlots([]);
-      if (user.uid) fetchBookedAppointments(user.uid); // Refresh booked appointments list
+      if (user.uid) fetchBookedAppointments(user.uid); 
     } catch (error: any) {
         console.error("Error booking appointment: ", error);
         toast({ variant: "destructive", title: "Booking Error", description: error.message || "Could not book appointment."});
@@ -279,7 +305,6 @@ export default function AppointmentsPage() {
     return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
   }
   if (!user && !authLoading) {
-    // This state should ideally be handled by AuthenticatedLayout redirecting to login
     return <div className="text-center p-8">Please log in to manage appointments.</div>;
   }
 
@@ -287,7 +312,6 @@ export default function AppointmentsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Appointments" description="Book new appointments and manage existing ones.">
-        {/* Optional: Action button like "Quick Book" or "View Calendar" */}
       </PageHeader>
 
       <Tabs defaultValue="book">
@@ -341,7 +365,7 @@ export default function AppointmentsPage() {
                               mode="single"
                               selected={field.value}
                               onSelect={(date) => { field.onChange(date); setValue("timeSlotId", ""); setAvailableSlots([]); }}
-                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate() -1)) } // Allow today
+                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate() -1)) } 
                               initialFocus
                               className="rounded-md border self-start"
                             />
@@ -414,6 +438,7 @@ export default function AppointmentsPage() {
                             {new Date(appt.date).toLocaleDateString()} at {appt.time}
                           </p>
                            <p className="text-xs">Type: <span className="inline-flex items-center"><Users className="w-3 h-3 mr-1"/>In-Person</span></p>
+                           {appt.tokenNumber && <p className="text-xs">Token: <span className="font-semibold">{appt.tokenNumber}</span></p>}
                         </div>
                         <div className="flex flex-col items-start sm:items-end">
                            <span className={`px-2 py-1 text-xs rounded-full font-medium capitalize
@@ -421,10 +446,11 @@ export default function AppointmentsPage() {
                               appt.status === 'active' ? 'bg-green-100 text-green-700' :
                               appt.status === 'completed' ? 'bg-gray-100 text-gray-700' :
                               appt.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                              appt.status === 'delayed' ? 'bg-yellow-100 text-yellow-700' :
                               'bg-gray-100 text-gray-700'}`}>
                             {appt.status}
                           </span>
-                          {(appt.status === 'upcoming' || appt.status === 'active') && (
+                          {(appt.status === 'upcoming' || appt.status === 'active' || appt.status === 'delayed') && (
                             <Button variant="link" size="sm" asChild className="p-0 h-auto mt-1">
                                 <Link href={`/app/appointments/${appt.id}/status`}>View Details/Track Token</Link>
                             </Button>
