@@ -10,8 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
 import Image from "next/image";
 import { useAuth } from "@/contexts/AuthContext";
-import { db, doc, getDoc, updateDoc, onSnapshot, Unsubscribe } from "@/lib/firebase"; 
-import type { Timestamp } from "firebase/firestore";
+import { db, doc, getDoc, updateDoc, onSnapshot, Unsubscribe, Timestamp } from "@/lib/firebase"; 
 import { useToast } from "@/hooks/use-toast";
 
 interface AppointmentDetails {
@@ -259,3 +258,4 @@ export default function AppointmentStatusPage() {
     </div>
   );
 }
+
