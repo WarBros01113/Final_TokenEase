@@ -8,11 +8,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { CalendarClock, Search, Loader2, AlertCircle } from "lucide-react";
+import { CalendarClock, Search, Loader2, AlertCircle, Eye } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { db, collection, getDocs, query as firestoreQuery, orderBy, Timestamp } from "@/lib/firebase";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface Appointment {
   id: string;
@@ -20,26 +29,18 @@ interface Appointment {
   patientId: string;
   doctorName: string;
   doctorId: string;
-  date: string; // Stored as YYYY-MM-DD string from Firestore
-  time: string; // Stored as HH:MM
-  appointmentTimeDisplay: string; // Stored as "HH:MM - HH:MM" or similar
+  date: string; 
+  time: string; 
+  appointmentTimeDisplay: string; 
   status: 'upcoming' | 'active' | 'delayed' | 'completed' | 'cancelled';
   tokenNumber?: number;
-  createdAt: Timestamp; // For consistent sorting if dates/times are identical
+  createdAt: Timestamp; 
+  notes?: string; 
+  specialization?: string;
 }
 
 type AppointmentStatus = Appointment['status'];
 
-const getStatusVariant = (status: AppointmentStatus): "default" | "secondary" | "destructive" | "outline" => {
-  switch (status) {
-    case 'upcoming': return 'default'; // Primary color
-    case 'active': return 'secondary'; // Accent color for active/positive
-    case 'delayed': return 'outline'; // Yellowish/Orange for warning
-    case 'completed': return 'secondary'; // Green or neutral for completed
-    case 'cancelled': return 'destructive';
-    default: return 'outline';
-  }
-};
 const getStatusBadgeStyle = (status: AppointmentStatus): string => {
     switch (status) {
         case 'upcoming': return 'bg-blue-100 text-blue-700 border-blue-300';
@@ -59,16 +60,17 @@ export default function ManageAppointmentsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<"upcoming" | "past">("upcoming");
 
+  const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
+  const [viewingAppointment, setViewingAppointment] = useState<Appointment | null>(null);
+
   const fetchAppointments = useCallback(async () => {
     setIsLoading(true);
     try {
       const appointmentsRef = collection(db, "appointments");
-      // Fetch all appointments, sort by date then time, most recent/relevant first
       const q = firestoreQuery(
         appointmentsRef,
         orderBy("date", "desc"),
         orderBy("time", "desc") 
-        // Note: createdAt can be a secondary sort if needed, but date/time should suffice
       );
       const querySnapshot = await getDocs(q);
       const fetchedAppointments: Appointment[] = [];
@@ -81,11 +83,13 @@ export default function ManageAppointmentsPage() {
           doctorName: data.doctorName || "N/A",
           doctorId: data.doctorId,
           date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
-          time: data.appointmentTime, // Assuming this is HH:MM
-          appointmentTimeDisplay: data.appointmentTimeDisplay || data.time, // Fallback to 'time' if display string not present
+          time: data.appointmentTime, 
+          appointmentTimeDisplay: data.appointmentTimeDisplay || data.time,
           status: data.status,
           tokenNumber: data.tokenNumber,
           createdAt: data.createdAt,
+          notes: data.notes,
+          specialization: data.specialization
         } as Appointment);
       });
       setAllAppointments(fetchedAppointments);
@@ -103,12 +107,10 @@ export default function ManageAppointmentsPage() {
 
   const filteredAppointments = useMemo(() => {
     let appointmentsToShow = allAppointments;
-
-    // Filter by active tab
     if (activeTab === "upcoming") {
       appointmentsToShow = appointmentsToShow
         .filter(appt => ['upcoming', 'active', 'delayed'].includes(appt.status))
-        .sort((a, b) => { // Sort upcoming: earliest date, then earliest time
+        .sort((a, b) => { 
             const dateComp = a.date.localeCompare(b.date);
             if (dateComp !== 0) return dateComp;
             return a.time.localeCompare(b.time);
@@ -116,21 +118,19 @@ export default function ManageAppointmentsPage() {
     } else if (activeTab === "past") {
       appointmentsToShow = appointmentsToShow
         .filter(appt => ['completed', 'cancelled'].includes(appt.status))
-        .sort((a,b) => { // Sort past: latest date, then latest time
+        .sort((a,b) => { 
             const dateComp = b.date.localeCompare(a.date);
             if (dateComp !== 0) return dateComp;
             return b.time.localeCompare(a.time);
         });
-    } else { // "all" case or default if more tabs added
-       appointmentsToShow = appointmentsToShow.sort((a,b) => { // Default sort: latest date, then latest time
+    } else { 
+       appointmentsToShow = appointmentsToShow.sort((a,b) => { 
             const dateComp = b.date.localeCompare(a.date);
             if (dateComp !== 0) return dateComp;
             return b.time.localeCompare(a.time);
         });
     }
     
-
-    // Filter by search term
     if (searchTerm) {
       appointmentsToShow = appointmentsToShow.filter(appt =>
         appt.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -138,9 +138,13 @@ export default function ManageAppointmentsPage() {
         appt.id.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
-
     return appointmentsToShow;
   }, [allAppointments, activeTab, searchTerm]);
+
+  const handleViewAppointment = (appointment: Appointment) => {
+    setViewingAppointment(appointment);
+    setIsViewDialogOpen(true);
+  };
 
   if (isLoading) {
     return (
@@ -177,14 +181,42 @@ export default function ManageAppointmentsPage() {
               <TabsTrigger value="past">Past (Completed/Cancelled)</TabsTrigger>
             </TabsList>
             <TabsContent value="upcoming">
-              <AppointmentsTable appointments={filteredAppointments} isLoading={isLoading}/>
+              <AppointmentsTable appointments={filteredAppointments} isLoading={isLoading} onViewDetails={handleViewAppointment} />
             </TabsContent>
             <TabsContent value="past">
-              <AppointmentsTable appointments={filteredAppointments} isLoading={isLoading}/>
+              <AppointmentsTable appointments={filteredAppointments} isLoading={isLoading} onViewDetails={handleViewAppointment} />
             </TabsContent>
           </Tabs>
         </CardContent>
       </Card>
+
+      {viewingAppointment && (
+        <AlertDialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
+          <AlertDialogContent className="max-w-lg">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Appointment Details</AlertDialogTitle>
+              <AlertDialogDescription>
+                ID: {viewingAppointment.id}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className="space-y-2 text-sm max-h-[60vh] overflow-y-auto pr-2">
+              <p><strong>Patient:</strong> {viewingAppointment.patientName} (ID: {viewingAppointment.patientId.substring(0,8)}...)</p>
+              <p><strong>Doctor:</strong> {viewingAppointment.doctorName} (ID: {viewingAppointment.doctorId.substring(0,8)}...)</p>
+              {viewingAppointment.specialization && <p><strong>Specialization:</strong> {viewingAppointment.specialization}</p>}
+              <p><strong>Date:</strong> {new Date(viewingAppointment.date).toLocaleDateString()}</p>
+              <p><strong>Time Slot:</strong> {viewingAppointment.appointmentTimeDisplay}</p>
+              <p><strong>Actual Time (HH:MM):</strong> {viewingAppointment.time}</p>
+              <p><strong>Token:</strong> {viewingAppointment.tokenNumber || 'N/A'}</p>
+              <p><strong>Status:</strong> <span className={`font-semibold px-2 py-0.5 rounded-full text-xs capitalize ${getStatusBadgeStyle(viewingAppointment.status)}`}>{viewingAppointment.status}</span></p>
+              {viewingAppointment.notes && <p><strong>Notes:</strong> {viewingAppointment.notes}</p>}
+              <p><strong>Created At:</strong> {viewingAppointment.createdAt.toDate().toLocaleString()}</p>
+            </div>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => setViewingAppointment(null)}>Close</AlertDialogCancel>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </div>
   );
 }
@@ -192,9 +224,10 @@ export default function ManageAppointmentsPage() {
 interface AppointmentsTableProps {
     appointments: Appointment[];
     isLoading: boolean;
+    onViewDetails: (appointment: Appointment) => void;
 }
 
-const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isLoading }) => {
+const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isLoading, onViewDetails }) => {
     if (isLoading) {
       return (
         <div className="flex items-center justify-center py-8">
@@ -237,15 +270,13 @@ const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isL
                     <TableCell>{appt.appointmentTimeDisplay}</TableCell>
                     <TableCell>{appt.tokenNumber || 'N/A'}</TableCell>
                     <TableCell>
-                        <Badge variant={getStatusVariant(appt.status)} className={getStatusBadgeStyle(appt.status) + ' ' + 'font-semibold'}>
+                        <Badge variant={"outline"} className={getStatusBadgeStyle(appt.status) + ' ' + 'font-semibold'}>
                          {appt.status.charAt(0).toUpperCase() + appt.status.slice(1)}
                         </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                        {/* Future: Link to a detailed appointment view modal or page */}
-                        <Button variant="outline" size="sm" asChild>
-                            {/* This is a placeholder, actual patient appointment status page is specific to a patient */}
-                            <Link href={`#`} onClick={(e) => { e.preventDefault(); alert('Detailed admin view not implemented yet.');}}>View</Link>
+                        <Button variant="outline" size="sm" onClick={() => onViewDetails(appt)}>
+                            <Eye className="mr-1 h-4 w-4" /> View
                         </Button>
                     </TableCell>
                     </TableRow>
@@ -255,3 +286,4 @@ const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isL
         </div>
     );
 }
+
