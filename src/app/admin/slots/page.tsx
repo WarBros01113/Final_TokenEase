@@ -15,7 +15,7 @@ import { PlusCircle, Edit, Trash2, CalendarClock, Loader2, CalendarDays } from "
 import { useState, useEffect, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
-import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, query as firestoreQuery, orderBy, where } from "@/lib/firebase";
+import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, query as firestoreQuery, orderBy } from "@/lib/firebase";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,7 +25,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
 const daysOfWeekOptions = [
@@ -38,17 +37,28 @@ const daysOfWeekOptions = [
   { id: "Sunday", label: "Sunday" },
 ];
 
+const generateTimeSlotCheckboxOptions = () => {
+  const options = [];
+  const startHour = 9;
+  const endHour = 18; // Up to 17:45 (ends at 18:00)
+
+  for (let hour = startHour; hour < endHour; hour++) {
+    for (let minute = 0; minute < 60; minute += 15) {
+      const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+      options.push({ id: time, label: time });
+    }
+  }
+  return options;
+};
+const timeSlotCheckboxOptions = generateTimeSlotCheckboxOptions();
+
+
 const slotFormSchema = z.object({
   id: z.string().optional(),
   doctorId: z.string().min(1, "Doctor is required."),
-  dayOfWeek: z.array(z.string()).nonempty({ message: "Please select at least one day." }),
-  startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid start time (HH:MM)."),
-  endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid end time (HH:MM)."),
-  slotDurationMinutes: z.coerce.number().min(5, "Duration must be at least 5 minutes.").max(120),
+  dayOfWeek: z.string().min(1, "Day of the week is required."),
+  selectedSlots: z.array(z.string()).nonempty({ message: "Please select at least one time slot." }),
   capacityPerSlot: z.coerce.number().min(1, "Capacity must be at least 1.").max(15, "Capacity cannot exceed 15."),
-}).refine(data => data.startTime < data.endTime, {
-  message: "End time must be after start time.",
-  path: ["endTime"],
 });
 
 type SlotFormValues = z.infer<typeof slotFormSchema>;
@@ -58,9 +68,8 @@ interface DoctorOption {
   name: string;
 }
 
-interface SlotConfig extends Omit<SlotFormValues, 'dayOfWeek'> {
+interface SlotConfig extends SlotFormValues {
   id: string;
-  dayOfWeek: string[];
   doctorName?: string;
   createdAt?: any;
 }
@@ -82,7 +91,7 @@ export default function ManageSlotsPage() {
 
   const form = useForm<SlotFormValues>({
     resolver: zodResolver(slotFormSchema),
-    defaultValues: { doctorId: "", dayOfWeek: [], startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 1 },
+    defaultValues: { doctorId: "", dayOfWeek: "Monday", selectedSlots: [], capacityPerSlot: 1 },
   });
 
   const fetchDoctors = useCallback(async () => {
@@ -101,15 +110,16 @@ export default function ManageSlotsPage() {
   }, [toast]);
 
   const fetchSlotConfigs = useCallback(async () => {
-    if (doctors.length === 0 && !isLoadingDoctors) { // Ensure doctors are loaded or attempted to load
+    if (doctors.length === 0 && !isLoadingDoctors) {
         setSlotConfigs([]);
         setIsSlotConfigLoading(false);
         return;
     }
-    if(doctors.length > 0) { // Only fetch if doctors are available
+    if(doctors.length > 0) { 
         setIsSlotConfigLoading(true);
         try {
-          const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId", "asc"), orderBy("startTime", "asc")));
+          // Changed orderBy: startTime removed, dayOfWeek added
+          const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId", "asc"), orderBy("dayOfWeek", "asc")));
           const fetchedConfigs: SlotConfig[] = [];
           const doctorNameMap = new Map(doctors.map(d => [d.id, d.name]));
           slotsSnapshot.forEach(docSnap => {
@@ -117,18 +127,18 @@ export default function ManageSlotsPage() {
             fetchedConfigs.push({
                 id: docSnap.id,
                 ...data,
-                dayOfWeek: Array.isArray(data.dayOfWeek) ? data.dayOfWeek : (typeof data.dayOfWeek === 'string' ? [data.dayOfWeek] : []),
+                selectedSlots: Array.isArray(data.selectedSlots) ? data.selectedSlots : [],
                 doctorName: doctorNameMap.get(data.doctorId) || data.doctorId
             } as SlotConfig);
           });
           setSlotConfigs(fetchedConfigs);
         } catch (error: any) {
           console.error("Error fetching slot configurations: ", error);
-          if (error.code === "failed-precondition" || (error.message && error.message.includes("firestore/failed-precondition"))) {
-             toast({ variant: "destructive", title: "Firestore Index Required", description: "A Firestore index is needed for slot configurations (doctorId asc, startTime asc). Please check the console for a link to create it, or create it manually.", duration: 10000 });
-             console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message or create it manually: collection 'slotConfigurations', fields: 'doctorId' (Ascending), 'startTime' (Ascending).");
-          } else {
-            toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations." });
+          // Generic error toast, specific index toast removed as index requirement changed.
+          // Firebase console will prompt for new index: collection 'slotConfigurations', fields: 'doctorId' (Ascending), 'dayOfWeek' (Ascending).
+          toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations. A new Firestore index might be required. Check console for details.", duration: 10000 });
+          if (error.message && error.message.includes("firestore/failed-precondition")) {
+            console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message or create it manually: collection 'slotConfigurations', fields: 'doctorId' (Ascending), 'dayOfWeek' (Ascending).");
           }
         } finally {
           setIsSlotConfigLoading(false);
@@ -141,9 +151,7 @@ export default function ManageSlotsPage() {
   }, [fetchDoctors]);
 
   useEffect(() => {
-    // This effect runs when `doctors` or `isLoadingDoctors` changes.
-    // It calls `fetchSlotConfigs` which depends on `doctors`.
-    if (!isLoadingDoctors) { // Only proceed if doctor loading is complete
+    if (!isLoadingDoctors) {
         fetchSlotConfigs();
     }
   }, [doctors, isLoadingDoctors, fetchSlotConfigs]);
@@ -154,11 +162,11 @@ export default function ManageSlotsPage() {
       setEditingSlotConfig(slotConfig);
       form.reset({
         ...slotConfig,
-        dayOfWeek: Array.isArray(slotConfig.dayOfWeek) ? slotConfig.dayOfWeek : (typeof slotConfig.dayOfWeek === 'string' ? [slotConfig.dayOfWeek] : [])
+        selectedSlots: Array.isArray(slotConfig.selectedSlots) ? slotConfig.selectedSlots : []
       });
     } else {
       setEditingSlotConfig(null);
-      form.reset({ doctorId: "", dayOfWeek: [], startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 1 });
+      form.reset({ doctorId: "", dayOfWeek: "Monday", selectedSlots: [], capacityPerSlot: 1 });
     }
     setIsFormDialogOpen(true);
   };
@@ -193,15 +201,13 @@ export default function ManageSlotsPage() {
 
   const confirmDeleteSlotConfig = async () => {
     if (!slotConfigIdToDelete) return;
-    console.log("Attempting to delete slotConfigId:", slotConfigIdToDelete, "for doctor:", slotDoctorNameToDelete || "Unknown");
     try {
         await deleteDoc(doc(db, "slotConfigurations", slotConfigIdToDelete));
-        toast({ title: "Slot Configuration Deleted", description: `Slot for ${slotDoctorNameToDelete || 'selected doctor'} removed.`, variant: "default" });
-        console.log("Successfully deleted slotConfigId:", slotConfigIdToDelete);
+        toast({ title: "Slot Configuration Deleted", description: `Slot config for ${slotDoctorNameToDelete || 'selected doctor'} removed.`, variant: "default" });
         fetchSlotConfigs(); 
     } catch (error: any) {
-        console.error("Error deleting slot config (slotConfigId:", slotConfigIdToDelete, "): ", error);
-        toast({variant: "destructive", title: "Delete Error", description: `Could not delete slot configuration: ${error.message || 'Unknown error'}. Check console for details.`})
+        console.error("Error deleting slot config: ", error);
+        toast({variant: "destructive", title: "Delete Error", description: `Could not delete slot configuration: ${error.message || 'Unknown error'}.`})
     } finally {
         setIsDeleteDialogOpen(false);
         setSlotConfigIdToDelete(null);
@@ -221,7 +227,7 @@ export default function ManageSlotsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Manage Doctor Slots" description="Define doctors' availability schedules and slot capacities.">
+      <PageHeader title="Manage Doctor Slots" description="Define doctors' availability schedules and slot capacities by selecting specific time slots.">
         <Button onClick={() => handleFormDialogOpen()} disabled={doctors.length === 0}>
           <PlusCircle className="mr-2 h-4 w-4" /> Add Slot Configuration
         </Button>
@@ -249,16 +255,15 @@ export default function ManageSlotsPage() {
              <div className="text-center py-8 text-muted-foreground">
                 <CalendarClock className="mx-auto h-12 w-12 mb-4"/>
                 <p>No slot configurations found. Add one to define doctor availability.</p>
-                <p className="text-xs mt-1">If you are seeing this after creating an index, it might take a few minutes for the index to activate.</p>
+                <p className="text-xs mt-1">If you recently created a Firestore index, it might take a few minutes to activate.</p>
             </div>
           ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Doctor</TableHead>
-                <TableHead>Days</TableHead>
-                <TableHead>Time Range</TableHead>
-                <TableHead>Slot Duration</TableHead>
+                <TableHead>Day</TableHead>
+                <TableHead>Selected Slots</TableHead>
                 <TableHead>Capacity/Slot</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -267,9 +272,10 @@ export default function ManageSlotsPage() {
               {slotConfigs.map((sc) => (
                 <TableRow key={sc.id}>
                   <TableCell className="font-medium">{sc.doctorName || sc.doctorId}</TableCell>
-                  <TableCell>{(Array.isArray(sc.dayOfWeek) ? sc.dayOfWeek.join(', ') : sc.dayOfWeek) || 'N/A'}</TableCell>
-                  <TableCell>{sc.startTime} - {sc.endTime}</TableCell>
-                  <TableCell>{sc.slotDurationMinutes} mins</TableCell>
+                  <TableCell>{sc.dayOfWeek}</TableCell>
+                  <TableCell>
+                    {sc.selectedSlots.length > 0 ? `${sc.selectedSlots.length} slots selected (e.g., ${sc.selectedSlots[0]})` : 'None'}
+                  </TableCell>
                   <TableCell>{sc.capacityPerSlot} patients</TableCell>
                   <TableCell className="text-right space-x-2">
                     <Button variant="ghost" size="icon" onClick={() => handleFormDialogOpen(sc)}>
@@ -292,7 +298,7 @@ export default function ManageSlotsPage() {
           <DialogHeader>
             <DialogTitle>{editingSlotConfig ? "Edit Slot Configuration" : "Add New Slot Configuration"}</DialogTitle>
             <DialogDescription>
-              Define a recurring availability block for a doctor. Max 15 patients per generated slot.
+              Select specific 15-minute time slots for a doctor on a particular day. Max 15 patients per individual slot.
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -316,43 +322,60 @@ export default function ManageSlotsPage() {
               <FormField
                 control={form.control}
                 name="dayOfWeek"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Day of Week</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select a day" /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {daysOfWeekOptions.map(day => <SelectItem key={day.id} value={day.id}>{day.label}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              
+              <FormField
+                control={form.control}
+                name="selectedSlots"
                 render={() => ( 
                   <FormItem>
                     <div className="mb-2">
-                      <FormLabel className="text-base flex items-center"><CalendarDays className="mr-2 h-4 w-4"/>Days of Week</FormLabel>
+                      <FormLabel className="text-base flex items-center"><CalendarDays className="mr-2 h-4 w-4"/>Select Available 15-Minute Slots</FormLabel>
                       <FormDescription>
-                        Select the days this configuration applies to.
+                        Check the boxes for time slots the doctor will be available. (9:00 AM - 5:45 PM)
                       </FormDescription>
                     </div>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2 border rounded-md">
-                      {daysOfWeekOptions.map((day) => (
+                    <div className="grid grid-cols-4 gap-2 p-2 border rounded-md max-h-60 overflow-y-auto">
+                      {timeSlotCheckboxOptions.map((slot) => (
                         <FormField
-                          key={day.id}
+                          key={slot.id}
                           control={form.control}
-                          name="dayOfWeek"
+                          name="selectedSlots"
                           render={({ field: checkboxField }) => {
                             return (
                               <FormItem
-                                key={day.id}
+                                key={slot.id}
                                 className="flex flex-row items-center space-x-2 space-y-0 bg-secondary/30 p-2 rounded"
                               >
                                 <FormControl>
                                   <Checkbox
-                                    checked={checkboxField.value?.includes(day.id)}
+                                    checked={checkboxField.value?.includes(slot.id)}
                                     onCheckedChange={(checked) => {
                                       const currentValue = checkboxField.value || [];
                                       return checked
-                                        ? checkboxField.onChange([...currentValue, day.id])
+                                        ? checkboxField.onChange([...currentValue, slot.id])
                                         : checkboxField.onChange(
                                             currentValue.filter(
-                                              (value) => value !== day.id
+                                              (value) => value !== slot.id
                                             )
                                           );
                                     }}
                                   />
                                 </FormControl>
                                 <FormLabel className="text-sm font-normal whitespace-nowrap">
-                                  {day.label}
+                                  {slot.label}
                                 </FormLabel>
                               </FormItem>
                             );
@@ -364,49 +387,14 @@ export default function ManageSlotsPage() {
                   </FormItem>
                 )}
               />
-              <div className="grid grid-cols-2 gap-4">
-                <FormField
-                    control={form.control}
-                    name="startTime"
-                    render={({ field }) => (
-                    <FormItem>
-                        <FormLabel>Start Time</FormLabel>
-                        <FormControl><Input type="time" {...field} /></FormControl>
-                        <FormMessage />
-                    </FormItem>
-                    )}
-                />
-                <FormField
-                    control={form.control}
-                    name="endTime"
-                    render={({ field }) => (
-                    <FormItem>
-                        <FormLabel>End Time</FormLabel>
-                        <FormControl><Input type="time" {...field} /></FormControl>
-                        <FormMessage />
-                    </FormItem>
-                    )}
-                />
-              </div>
-              <FormField
-                control={form.control}
-                name="slotDurationMinutes"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Slot Duration (minutes)</FormLabel>
-                    <FormControl><Input type="number" {...field} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
               <FormField
                 control={form.control}
                 name="capacityPerSlot"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Max Patients Per Individual Slot</FormLabel>
+                    <FormLabel>Max Patients Per Selected Slot</FormLabel>
                     <FormControl><Input type="number" {...field} /></FormControl>
-                    <FormDescription>Capacity for each generated slot (e.g. 9:00-9:30). System cap: 15.</FormDescription>
+                    <FormDescription>Capacity for each checked 15-min slot. System cap: 15.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -446,3 +434,5 @@ export default function ManageSlotsPage() {
     </div>
   );
 }
+
+    
