@@ -4,66 +4,54 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Users collection
-    // - Authenticated users can create their own user document.
-    // - Users can only read or update their own document.
-    // - Admins can read any user document (useful for admin panels).
+    // Helper function to check admin role
+    // Assumes user documents in /users/{userId} have a 'role' field.
+    function isAdmin() {
+      return request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Users collection:
     match /users/{userId} {
+      // Admins can read/update any user. Users can read/update their own profile.
+      allow read, update: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      // Authenticated users can create their own profile document (e.g., during signup).
+      // Client-side logic should ensure the {userId} in the path matches request.auth.uid.
       allow create: if request.auth != null;
-      allow read, update: if request.auth != null && request.auth.uid == userId;
-      // Example: Allow admins to read user data
-      // allow read: if request.auth != null && (request.auth.uid == userId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      // Only admins can list all users.
+      allow list: if isAdmin();
     }
 
-    // Doctors collection
-    // - Authenticated users (patients/admins) can read/list doctors.
-    // - Only admins can create, update, or delete doctors.
-    match /doctors/{doctorId} {
-      allow read, list: if request.auth != null;
-      allow create, update, delete: if request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
-    }
-
-    // Appointments collection
-    // - Patients can create appointments for themselves.
-    // - Patients can read/list their own appointments.
-    // - Patients can update their own upcoming appointments (e.g., to cancel - more specific logic might be needed).
-    // - Admins can read/list all appointments.
-    // - Admins can potentially update/delete any appointment.
+    // Appointments collection:
     match /appointments/{appointmentId} {
-      allow create: if request.auth != null && request.resource.data.patientId == request.auth.uid;
+      // Patients can create appointments for themselves. Admins can also create appointments.
+      allow create: if request.auth != null && (request.resource.data.patientId == request.auth.uid || isAdmin());
+      // Patients can read/update their own appointments. Admins can read/update any appointment.
+      allow read, update: if request.auth != null && (resource.data.patientId == request.auth.uid || isAdmin());
       
-      allow read: if request.auth != null && 
-                     (resource.data.patientId == request.auth.uid || 
-                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
-
-      // For 'list' operations (queries):
-      // This rule allows a patient to query appointments where their UID is the patientId,
-      // OR an admin to query any appointments.
-      // This is a simplified list rule. For more complex queries, you might need more specific rules
-      // or to ensure your queries match what's allowed.
+      // Patients can list their own appointments if the query filters by their patientId.
+      // Admins can list all appointments.
+      // This rule expects that a patient's query for appointments includes a 'where("patientId", "==", request.auth.uid)' clause,
+      // and that this is the first 'where' clause if there are multiple 'where' conditions in the query.
       allow list: if request.auth != null &&
-                    ( (request.query.resource.__name__[0] == "users" && request.query.resource.__name__[1] == request.auth.uid) || // This part seems off for querying 'appointments' directly
-                      (request.auth.uid != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
-                      (request.query.filters.size() > 0 && request.query.filters[0].fieldPath == "patientId" && request.query.filters[0].value == request.auth.uid) // Allows querying by patientId
-                    );
-
-
-      allow update: if request.auth != null && 
-                      (resource.data.patientId == request.auth.uid || 
-                       get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
-      
-      allow delete: if request.auth != null && 
-                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+                     (
+                       (request.query.filters.size() > 0 && request.query.filters[0][0] == 'patientId' && request.query.filters[0][2] == request.auth.uid) ||
+                       isAdmin()
+                     );
     }
 
-    // Add rules for other collections like 'bills', 'chatMessages', etc.
-    // Example for a 'chatMessages' subcollection under appointments:
-    // match /appointments/{appointmentId}/messages/{messageId} {
-    //   allow read, create: if request.auth != null && 
-    //                         (get(/databases/$(database)/documents/appointments/$(appointmentId)).data.patientId == request.auth.uid || 
-    //                          get(/databases/$(database)/documents/appointments/$(appointmentId)).data.doctorId == request.auth.uid || // Assuming doctor's UID is also stored for chat
-    //                          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
-    // }
+    // Doctors collection:
+    match /doctors/{doctorId} {
+      // Any authenticated user can read doctor information and list all doctors.
+      allow read, list: if request.auth != null;
+      // Only admins can create, update, or delete doctor information.
+      allow create, update, delete: if isAdmin();
+    }
 
+    // --- Your Original Default Deny Rule ---
+    // This rule ensures that any path not explicitly matched above is denied.
+    // It's crucial for security if other collections are added without specific rules.
+    match /{document=**} {
+      allow read, write: if false;
+    }
   }
 }
