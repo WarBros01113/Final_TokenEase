@@ -78,7 +78,7 @@ export default function AppointmentsPage() {
       const q = firestoreQuery(collection(db, "doctors"), orderBy("name"));
       const snapshot = await getDocs(q);
       const fetchedDoctors: DoctorOption[] = [];
-      snapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, ...doc.data() } as DoctorOption));
+      snapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, specialization: doc.data().specialization || 'General', ...doc.data() } as DoctorOption));
       setDoctors(fetchedDoctors);
     } catch (error) {
       console.error("Error fetching doctors:", error);
@@ -107,7 +107,7 @@ export default function AppointmentsPage() {
                 date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
                 time: data.appointmentTimeDisplay || data.time,
                 status: data.status,
-                type: "In-Person",
+                type: "In-Person", // Assuming all are in-person for now
                 patientId: data.patientId,
             });
         });
@@ -184,7 +184,7 @@ export default function AppointmentsPage() {
                 appointmentsRef,
                 where("doctorId", "==", selectedDoctorId),
                 where("date", "==", dateString),
-                limit(300) // Added limit to comply with potential security rule requirements
+                limit(300) // This limit is important for the security rule
             );
             const bookingsSnapshot = await getDocs(qBookings);
             const bookingsOnDate = bookingsSnapshot.docs.map(d => d.data());
@@ -197,7 +197,7 @@ export default function AppointmentsPage() {
                 }
             });
           }
-          setAvailableSlots(generatedSlots);
+          setAvailableSlots(generatedSlots.sort((a,b) => a.startTime.localeCompare(b.startTime)));
         } catch (error: any) {
           console.error("Error generating/fetching slots:", error);
           if (error.code) {
@@ -249,14 +249,14 @@ export default function AppointmentsPage() {
         doctorName: doctor.name,
         specialization: doctor.specialization,
         date: selectedDate.toISOString().split('T')[0],
-        time: selectedSlot.startTime,
-        appointmentTime: selectedSlot.startTime,
-        appointmentTimeDisplay: selectedSlot.time,
+        time: selectedSlot.startTime, // Storing HH:MM
+        appointmentTime: selectedSlot.startTime, // Storing HH:MM, consistent with dashboard
+        appointmentTimeDisplay: selectedSlot.time, // Storing "HH:MM - HH:MM"
         slotConfigId: selectedSlot.slotConfigId,
         status: 'upcoming',
         createdAt: serverTimestamp(),
       };
-      await addDoc(collection(db, "appointments"), appointmentData);
+      const newApptRef = await addDoc(collection(db, "appointments"), appointmentData);
 
       toast({
         title: "Appointment Booked!",
@@ -266,7 +266,7 @@ export default function AppointmentsPage() {
       reset();
       setSelectedDoctorId(null);
       setAvailableSlots([]);
-      if (user.uid) fetchBookedAppointments(user.uid);
+      if (user.uid) fetchBookedAppointments(user.uid); // Refresh booked appointments list
     } catch (error: any) {
         console.error("Error booking appointment: ", error);
         toast({ variant: "destructive", title: "Booking Error", description: error.message || "Could not book appointment."});
@@ -279,6 +279,7 @@ export default function AppointmentsPage() {
     return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
   }
   if (!user && !authLoading) {
+    // This state should ideally be handled by AuthenticatedLayout redirecting to login
     return <div className="text-center p-8">Please log in to manage appointments.</div>;
   }
 
@@ -286,6 +287,7 @@ export default function AppointmentsPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Appointments" description="Book new appointments and manage existing ones.">
+        {/* Optional: Action button like "Quick Book" or "View Calendar" */}
       </PageHeader>
 
       <Tabs defaultValue="book">
@@ -339,7 +341,7 @@ export default function AppointmentsPage() {
                               mode="single"
                               selected={field.value}
                               onSelect={(date) => { field.onChange(date); setValue("timeSlotId", ""); setAvailableSlots([]); }}
-                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate())) }
+                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate() -1)) } // Allow today
                               initialFocus
                               className="rounded-md border self-start"
                             />
