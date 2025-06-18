@@ -1,3 +1,4 @@
+
 "use client";
 
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -40,8 +41,13 @@ export default function PatientDashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!user) {
+    const currentUserId = user?.uid;
+
+    if (!currentUserId) {
       setIsLoading(false);
+      setUpcomingAppointments([]);
+      setActiveToken(null);
+      // Don't setError here, as it might be normal if user is logged out or loading
       return;
     }
 
@@ -53,7 +59,7 @@ export default function PatientDashboardPage() {
         const appointmentsRef = collection(db, "appointments");
         const qUpcoming = query(
           appointmentsRef,
-          where("patientId", "==", user.uid),
+          where("patientId", "==", currentUserId),
           where("status", "==", "upcoming"),
           orderBy("date", "asc"),
           orderBy("time", "asc")
@@ -64,7 +70,6 @@ export default function PatientDashboardPage() {
           const data = doc.data();
           fetchedUpcomingAppointments.push({
             id: doc.id,
-            // Ensure all fields from Appointment interface are mapped
             doctorId: data.doctorId,
             doctorName: data.doctorName,
             specialization: data.specialization,
@@ -72,7 +77,7 @@ export default function PatientDashboardPage() {
             time: data.time,
             status: data.status,
             tokenNumber: data.tokenNumber,
-            estimatedWaitTime: data.estimatedWaitTime, // This would be dynamic
+            estimatedWaitTime: data.estimatedWaitTime, 
             patientId: data.patientId,
             createdAt: data.createdAt,
           });
@@ -82,21 +87,21 @@ export default function PatientDashboardPage() {
         // Fetch active appointment for token info
         const qActive = query(
           appointmentsRef,
-          where("patientId", "==", user.uid),
+          where("patientId", "==", currentUserId),
           where("status", "==", "active"),
-          orderBy("date", "desc"), // Get the most recent active one
+          orderBy("date", "desc"), 
           orderBy("time", "desc")
         );
         const activeSnapshot = await getDocs(qActive);
         if (!activeSnapshot.empty) {
           const activeApptDoc = activeSnapshot.docs[0];
-          const activeApptData = activeApptDoc.data() as Appointment;
+          const activeApptData = activeApptDoc.data() as Omit<Appointment, 'id' | 'createdAt'>; // Use Omit as id and createdAt are from doc
           setActiveToken({
             appointmentId: activeApptDoc.id,
             doctorName: activeApptData.doctorName,
             yourToken: activeApptData.tokenNumber || 0,
-            currentServing: activeApptData.tokenNumber ? activeApptData.tokenNumber - Math.floor(Math.random()*3 +1) : 0, // Mocked current serving
-            estimatedTime: activeApptData.estimatedWaitTime || "Soon", // Mocked
+            currentServing: activeApptData.tokenNumber ? activeApptData.tokenNumber - Math.floor(Math.random()*3 +1) : 0, 
+            estimatedTime: activeApptData.estimatedWaitTime || "Soon", 
           });
         } else {
           setActiveToken(null);
@@ -104,14 +109,14 @@ export default function PatientDashboardPage() {
 
       } catch (err: any) {
         console.error("Error fetching dashboard data:", err);
-        setError("Failed to load dashboard data. Please check your connection and try again. Ensure Firestore rules allow access.");
+        setError("Failed to load dashboard data. Please check your connection and try again. Ensure Firestore rules allow access and required indexes are created.");
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchData();
-  }, [user]);
+  }, [user?.uid]); // Depend only on user.uid
 
   if (isLoading) {
     return (
