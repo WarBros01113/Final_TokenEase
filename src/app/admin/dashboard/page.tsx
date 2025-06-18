@@ -1,8 +1,8 @@
+
 "use client";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { BarChart, LineChart, PieChart } from 'lucide-react'; // Placeholder icons for charts
-import { Users, CalendarCheck, DollarSign, AlertTriangle } from "lucide-react";
+import { Users, UserCheck, CalendarCheck, ShieldAlert, PieChart as PieChartIcon, Loader2 } from "lucide-react";
 import {
   ChartContainer,
   ChartTooltip,
@@ -10,48 +10,128 @@ import {
   ChartLegend,
   ChartLegendContent,
 } from "@/components/ui/chart";
-import { Bar, CartesianGrid, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Pie, Cell, Line } from 'recharts'; // Using recharts directly
+import { Pie, Cell, ResponsiveContainer } from 'recharts';
 import type { ChartConfig } from "@/components/ui/chart";
+import { useEffect, useState, useCallback } from "react";
+import { db, collection, getDocs, query as firestoreQuery, where, Timestamp, count } from "@/lib/firebase";
+import { useToast } from "@/hooks/use-toast";
 
-const chartData = [
-  { month: "January", appointments: 186, revenue: 8000 },
-  { month: "February", appointments: 305, revenue: 12000 },
-  { month: "March", appointments: 237, revenue: 9500 },
-  { month: "April", appointments: 273, revenue: 11000 },
-  { month: "May", appointments: 209, revenue: 8500 },
-  { month: "June", appointments: 314, revenue: 13000 },
-];
+interface SummaryStat {
+  title: string;
+  value: string;
+  icon: JSX.Element;
+  trend?: string; // Optional trend for future use
+}
 
-const chartConfig = {
-  appointments: {
-    label: "Appointments",
-    color: "hsl(var(--primary))",
-  },
-  revenue: {
-    label: "Revenue",
-    color: "hsl(var(--accent))",
-  },
+interface DoctorAppointmentCount {
+  name: string; // Doctor's name
+  value: number; // Number of appointments
+  fill: string; // Color for the pie chart segment
+}
+
+const initialChartConfig = {
+  // Config will be populated dynamically based on doctors
 } satisfies ChartConfig;
-
-const pieChartData = [
-    { name: 'Cardiology', value: 400, fill: 'hsl(var(--chart-1))' },
-    { name: 'Pediatrics', value: 300, fill: 'hsl(var(--chart-2))'  },
-    { name: 'Dermatology', value: 200, fill: 'hsl(var(--chart-3))'  },
-    { name: 'Others', value: 278, fill: 'hsl(var(--chart-4))'  },
-];
 
 
 export default function AdminDashboardPage() {
-  const summaryStats = [
-    { title: "Total Patients", value: "1,250", icon: <Users className="h-6 w-6 text-primary" />, trend: "+5% this month" },
-    { title: "Appointments Today", value: "75", icon: <CalendarCheck className="h-6 w-6 text-primary" />, trend: "+10 from yesterday" },
-    { title: "Total Revenue (Month)", value: "$13,500", icon: <DollarSign className="h-6 w-6 text-primary" />, trend: "+8% from last month" },
-    { title: "Active Penalties", value: "12", icon: <AlertTriangle className="h-6 w-6 text-destructive" />, trend: "2 new today" },
+  const { toast } = useToast();
+  const [isLoading, setIsLoading] = useState(true);
+  
+  const [totalRegisteredUsers, setTotalRegisteredUsers] = useState(0);
+  const [totalPatientsVisited, setTotalPatientsVisited] = useState(0);
+  const [patientsVisitedToday, setPatientsVisitedToday] = useState(0);
+  const [activePenalties, setActivePenalties] = useState(0);
+  const [doctorAppointmentsData, setDoctorAppointmentsData] = useState<DoctorAppointmentCount[]>([]);
+  const [pieChartConfig, setPieChartConfig] = useState<ChartConfig>(initialChartConfig);
+
+
+  const fetchDashboardData = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      // 1. Total Registered Users (Patients)
+      const usersRef = collection(db, "users");
+      const patientsQuery = firestoreQuery(usersRef, where("role", "==", "patient"));
+      const patientsSnapshot = await getDocs(patientsQuery);
+      setTotalRegisteredUsers(patientsSnapshot.size);
+
+      // 2. Total Patients Visited (Completed Appointments)
+      const appointmentsRef = collection(db, "appointments");
+      const completedQuery = firestoreQuery(appointmentsRef, where("status", "==", "completed"));
+      const completedSnapshot = await getDocs(completedQuery);
+      setTotalPatientsVisited(completedSnapshot.size);
+
+      // 3. Patients Visited Today (Completed Appointments Today)
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+      const visitedTodayQuery = firestoreQuery(appointmentsRef, where("status", "==", "completed"), where("date", "==", todayStr));
+      const visitedTodaySnapshot = await getDocs(visitedTodayQuery);
+      setPatientsVisitedToday(visitedTodaySnapshot.size);
+      
+      // 4. Active Penalties
+      const penaltiesQuery1 = firestoreQuery(usersRef, where("isBlocked", "==", true));
+      const penaltiesSnapshot1 = await getDocs(penaltiesQuery1);
+      const penaltiesQuery2 = firestoreQuery(usersRef, where("strikes", ">", 0)); // Consider users with strikes but not yet blocked
+      const penaltiesSnapshot2 = await getDocs(penaltiesQuery2);
+      // Combine results ensuring uniqueness if a user is blocked AND has strikes
+      const penalizedUserIds = new Set<string>();
+      penaltiesSnapshot1.forEach(doc => penalizedUserIds.add(doc.id));
+      penaltiesSnapshot2.forEach(doc => penalizedUserIds.add(doc.id));
+      setActivePenalties(penalizedUserIds.size);
+
+      // 5. Appointments by Doctor (e.g., all appointments or completed ones)
+      // For simplicity, let's count all appointments per doctor for now
+      const allAppointmentsSnapshot = await getDocs(appointmentsRef);
+      const appointmentsByDoctor: { [key: string]: number } = {};
+      allAppointmentsSnapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.doctorName) {
+          appointmentsByDoctor[data.doctorName] = (appointmentsByDoctor[data.doctorName] || 0) + 1;
+        }
+      });
+      
+      const chartColors = ["hsl(var(--chart-1))", "hsl(var(--chart-2))", "hsl(var(--chart-3))", "hsl(var(--chart-4))", "hsl(var(--chart-5))"];
+      const newPieData: DoctorAppointmentCount[] = [];
+      const newPieConfig: ChartConfig = {};
+      Object.entries(appointmentsByDoctor).forEach(([doctorName, count], index) => {
+        const color = chartColors[index % chartColors.length];
+        newPieData.push({ name: doctorName, value: count, fill: color });
+        newPieConfig[doctorName] = { label: doctorName, color: color };
+      });
+      setDoctorAppointmentsData(newPieData);
+      setPieChartConfig(newPieConfig);
+
+    } catch (error) {
+      console.error("Error fetching dashboard data:", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not load dashboard data." });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  const summaryStats: SummaryStat[] = [
+    { title: "Total Registered Users", value: totalRegisteredUsers.toString(), icon: <Users className="h-6 w-6 text-primary" /> },
+    { title: "Total Patients Visited", value: totalPatientsVisited.toString(), icon: <UserCheck className="h-6 w-6 text-primary" /> },
+    { title: "Patients Visited Today", value: patientsVisitedToday.toString(), icon: <CalendarCheck className="h-6 w-6 text-primary" /> },
+    { title: "Active Penalties", value: activePenalties.toString(), icon: <ShieldAlert className="h-6 w-6 text-destructive" /> },
   ];
+  
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="ml-2">Loading dashboard data...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Admin Dashboard" description="Overview of clinic operations and statistics." />
+      <PageHeader title="Admin Dashboard" description="Overview of clinic operations and patient statistics." />
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {summaryStats.map(stat => (
@@ -62,62 +142,47 @@ export default function AdminDashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stat.value}</div>
-              <p className="text-xs text-muted-foreground">{stat.trend}</p>
+              {stat.trend && <p className="text-xs text-muted-foreground">{stat.trend}</p>}
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-1"> {/* Changed to lg:grid-cols-1 as only one chart remains */}
         <Card className="shadow-lg">
           <CardHeader>
-            <CardTitle className="flex items-center"><BarChart className="mr-2 h-5 w-5 text-primary" /> Monthly Appointments & Revenue</CardTitle>
-            <CardDescription>Overview of appointments and revenue for the last 6 months.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ChartContainer config={chartConfig} className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                 <RechartsPrimitive.BarChart data={chartData}>
-                  <CartesianGrid vertical={false} strokeDasharray="3 3" />
-                  <XAxis dataKey="month" tickLine={false} tickMargin={10} axisLine={false} />
-                  <YAxis yAxisId="left" orientation="left" stroke="hsl(var(--primary))" />
-                  <YAxis yAxisId="right" orientation="right" stroke="hsl(var(--accent))" />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  <ChartLegend content={<ChartLegendContent />} />
-                  <RechartsPrimitive.Bar dataKey="appointments" fill="var(--color-appointments)" radius={4} yAxisId="left" />
-                  <RechartsPrimitive.Line type="monotone" dataKey="revenue" stroke="var(--color-revenue)" strokeWidth={2} yAxisId="right" dot={false} />
-                </RechartsPrimitive.BarChart>
-              </ResponsiveContainer>
-            </ChartContainer>
-          </CardContent>
-        </Card>
-        
-        <Card className="shadow-lg">
-          <CardHeader>
-            <CardTitle className="flex items-center"><PieChart className="mr-2 h-5 w-5 text-primary" /> Appointments by Specialization</CardTitle>
-            <CardDescription>Distribution of appointments across different specializations.</CardDescription>
+            <CardTitle className="flex items-center"><PieChartIcon className="mr-2 h-5 w-5 text-primary" /> Appointments by Doctor</CardTitle>
+            <CardDescription>Distribution of appointments across different doctors.</CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
-             <ChartContainer config={{}} className="h-[300px] w-full max-w-xs">
-               <ResponsiveContainer width="100%" height="100%">
-                <RechartsPrimitive.PieChart>
-                  <RechartsPrimitive.Pie data={pieChartData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label >
-                     {pieChartData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.fill} />
-                      ))}
-                  </RechartsPrimitive.Pie>
-                  <ChartTooltip content={<ChartTooltipContent hideLabel />} />
-                  <ChartLegend content={<ChartLegendContent />} />
-                </RechartsPrimitive.PieChart>
-              </ResponsiveContainer>
-            </ChartContainer>
+             {doctorAppointmentsData.length > 0 ? (
+                <ChartContainer config={pieChartConfig} className="h-[300px] w-full max-w-md"> {/* Adjusted max-w */}
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RechartsPrimitive.PieChart>
+                      <RechartsPrimitive.Pie data={doctorAppointmentsData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label >
+                        {doctorAppointmentsData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.fill} />
+                          ))}
+                      </RechartsPrimitive.Pie>
+                      <ChartTooltip content={<ChartTooltipContent hideLabel />} />
+                      <ChartLegend content={<ChartLegendContent />} />
+                    </RechartsPrimitive.PieChart>
+                  </ResponsiveContainer>
+                </ChartContainer>
+             ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                    <PieChartIcon className="mx-auto h-12 w-12 mb-4"/>
+                    <p>No appointment data available to display chart.</p>
+                </div>
+             )}
           </CardContent>
         </Card>
       </div>
-
     </div>
   );
 }
 
-// Need to define RechartsPrimitive for the BarChart and PieChart components as used in shadcn/ui chart examples
+// Need to define RechartsPrimitive for the PieChart component as used in shadcn/ui chart examples
 import * as RechartsPrimitive from "recharts";
+
+    
