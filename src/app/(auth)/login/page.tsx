@@ -47,14 +47,23 @@ export default function LoginPage() {
   async function onSubmit(values: LoginFormValues) {
     setIsLoading(true);
     try {
-      const { role } = await signIn(values.email, values.password);
+      // The signIn function from AuthContext returns an object { user, role }
+      const { user: loggedInUser, role: userRole } = await signIn(values.email, values.password);
+      
+      // Diagnostic log: Check the role being returned
+      console.log('User signed in. Role from signIn:', userRole, 'User object:', loggedInUser);
+
       toast({
         title: "Login Successful",
-        description: "Welcome back!",
+        description: "Redirecting...", // Generic message
       });
-      if (role === 'admin') {
+
+      if (userRole === 'admin') {
+        console.log('Redirecting to admin dashboard...');
         router.push("/admin/dashboard");
       } else {
+        // Default to patient dashboard if not admin or role is null/undefined
+        console.log('Redirecting to patient dashboard as role is:', userRole);
         router.push("/app/dashboard"); 
       }
     } catch (error: any) {
@@ -70,8 +79,8 @@ export default function LoginPage() {
 
   return (
     <AuthFormWrapper
-      title="User Login" // Title made more generic
-      description="Access your TokenEase account." // Description made more generic
+      title="User Login"
+      description="Access your TokenEase account."
       footerContent={
         <>
           Don't have an account?{" "}
