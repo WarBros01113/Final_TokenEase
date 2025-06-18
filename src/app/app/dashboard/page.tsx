@@ -3,53 +3,139 @@
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, CalendarCheck, Clock, MessageCircle } from "lucide-react";
+import { AlertCircle, CalendarCheck, Clock, MessageCircle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import { db, collection, query, where, getDocs, orderBy, Timestamp } from "@/lib/firebase";
 
-// Mock data types
 interface Appointment {
   id: string;
+  doctorId: string;
   doctorName: string;
   specialization: string;
-  date: string;
+  date: string; // ISO string date
   time: string;
-  status: 'upcoming' | 'active' | 'completed';
+  status: 'upcoming' | 'active' | 'completed' | 'cancelled';
   tokenNumber?: number;
-  estimatedWaitTime?: string;
+  estimatedWaitTime?: string; // This would typically be dynamic
+  patientId: string;
+  createdAt: Timestamp;
 }
 
 interface TokenInfo {
-  currentServing: number;
+  currentServing: number; // This would come from doctor's side, mock for now
   yourToken: number;
-  estimatedTime: string;
+  estimatedTime: string; // Dynamic, mock for now
   doctorName: string;
+  appointmentId: string;
 }
 
 export default function PatientDashboardPage() {
   const { user } = useAuth();
   const [upcomingAppointments, setUpcomingAppointments] = useState<Appointment[]>([]);
   const [activeToken, setActiveToken] = useState<TokenInfo | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Mock fetching data
-    setUpcomingAppointments([
-      { id: "1", doctorName: "Dr. Smith", specialization: "Cardiologist", date: "2024-08-15", time: "10:00 AM", status: 'upcoming' },
-      { id: "2", doctorName: "Dr. Jones", specialization: "Pediatrician", date: "2024-08-16", time: "02:30 PM", status: 'upcoming' },
-    ]);
-    setActiveToken({
-      currentServing: 5,
-      yourToken: 8,
-      estimatedTime: "11:45 AM",
-      doctorName: "Dr. Emily White"
-    });
-  }, []);
+    if (!user) {
+      setIsLoading(false);
+      return;
+    }
+
+    const fetchData = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        // Fetch upcoming appointments
+        const appointmentsRef = collection(db, "appointments");
+        const qUpcoming = query(
+          appointmentsRef,
+          where("patientId", "==", user.uid),
+          where("status", "==", "upcoming"),
+          orderBy("date", "asc"),
+          orderBy("time", "asc")
+        );
+        const upcomingSnapshot = await getDocs(qUpcoming);
+        const fetchedUpcomingAppointments: Appointment[] = [];
+        upcomingSnapshot.forEach((doc) => {
+          const data = doc.data();
+          fetchedUpcomingAppointments.push({
+            id: doc.id,
+            // Ensure all fields from Appointment interface are mapped
+            doctorId: data.doctorId,
+            doctorName: data.doctorName,
+            specialization: data.specialization,
+            date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
+            time: data.time,
+            status: data.status,
+            tokenNumber: data.tokenNumber,
+            estimatedWaitTime: data.estimatedWaitTime, // This would be dynamic
+            patientId: data.patientId,
+            createdAt: data.createdAt,
+          });
+        });
+        setUpcomingAppointments(fetchedUpcomingAppointments);
+
+        // Fetch active appointment for token info
+        const qActive = query(
+          appointmentsRef,
+          where("patientId", "==", user.uid),
+          where("status", "==", "active"),
+          orderBy("date", "desc"), // Get the most recent active one
+          orderBy("time", "desc")
+        );
+        const activeSnapshot = await getDocs(qActive);
+        if (!activeSnapshot.empty) {
+          const activeApptDoc = activeSnapshot.docs[0];
+          const activeApptData = activeApptDoc.data() as Appointment;
+          setActiveToken({
+            appointmentId: activeApptDoc.id,
+            doctorName: activeApptData.doctorName,
+            yourToken: activeApptData.tokenNumber || 0,
+            currentServing: activeApptData.tokenNumber ? activeApptData.tokenNumber - Math.floor(Math.random()*3 +1) : 0, // Mocked current serving
+            estimatedTime: activeApptData.estimatedWaitTime || "Soon", // Mocked
+          });
+        } else {
+          setActiveToken(null);
+        }
+
+      } catch (err: any) {
+        console.error("Error fetching dashboard data:", err);
+        setError("Failed to load dashboard data. Please check your connection and try again. Ensure Firestore rules allow access.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="ml-2">Loading dashboard...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6 text-center p-8">
+        <AlertCircle className="mx-auto h-16 w-16 text-destructive" />
+        <h2 className="text-2xl font-semibold text-destructive">Error Loading Dashboard</h2>
+        <p className="text-muted-foreground">{error}</p>
+        <Button onClick={() => window.location.reload()} variant="outline">Try Again</Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <PageHeader title={`Welcome, ${user?.displayName || 'Patient'}!`} description="Here's an overview of your upcoming activities." />
+      <PageHeader title={`Welcome, ${user?.displayName || user?.fullName || 'Patient'}!`} description="Here's an overview of your upcoming activities." />
 
       {activeToken && (
         <Card className="bg-primary/10 border-primary shadow-lg">
@@ -57,7 +143,7 @@ export default function PatientDashboardPage() {
             <CardTitle className="text-primary flex items-center">
               <Clock className="mr-2 h-6 w-6" /> Live Token Status
             </CardTitle>
-            <CardDescription>Your current appointment with {activeToken.doctorName}.</CardDescription>
+            <CardDescription>Your current active appointment with {activeToken.doctorName}.</CardDescription>
           </CardHeader>
           <CardContent className="grid md:grid-cols-3 gap-4 text-center">
             <div>
@@ -73,6 +159,11 @@ export default function PatientDashboardPage() {
               <p className="text-3xl font-bold text-foreground">{activeToken.estimatedTime}</p>
             </div>
           </CardContent>
+           <CardContent className="text-center pb-4">
+             <Button asChild variant="default">
+                <Link href={`/app/appointments/${activeToken.appointmentId}/status`}>View Full Status</Link>
+             </Button>
+           </CardContent>
         </Card>
       )}
 
@@ -87,7 +178,7 @@ export default function PatientDashboardPage() {
                 {upcomingAppointments.map(appt => (
                   <li key={appt.id} className="p-3 bg-secondary/50 rounded-md shadow-sm">
                     <p className="font-semibold">{appt.doctorName} <span className="text-sm text-muted-foreground">({appt.specialization})</span></p>
-                    <p className="text-sm">{new Date(appt.date).toDateString()} at {appt.time}</p>
+                    <p className="text-sm">{new Date(appt.date).toLocaleDateString()} at {appt.time}</p>
                     <Button variant="link" size="sm" asChild className="p-0 h-auto mt-1">
                       <Link href={`/app/appointments/${appt.id}/status`}>View Details</Link>
                     </Button>
@@ -108,7 +199,7 @@ export default function PatientDashboardPage() {
             <CardTitle className="flex items-center"><MessageCircle className="mr-2 h-5 w-5 text-primary" /> Recent Messages</CardTitle>
           </CardHeader>
           <CardContent>
-            {/* Placeholder for recent messages */}
+            {/* Placeholder for recent messages - Implement based on chat feature */}
             <div className="flex items-center justify-center h-32 border-2 border-dashed rounded-md">
                 <p className="text-muted-foreground">No new messages.</p>
             </div>
@@ -123,7 +214,7 @@ export default function PatientDashboardPage() {
             <CardTitle className="flex items-center"><AlertCircle className="mr-2 h-5 w-5 text-primary" /> Important Notices</CardTitle>
           </CardHeader>
           <CardContent>
-             {/* Placeholder for notices */}
+             {/* Placeholder for notices - Implement if needed */}
             <div className="flex items-center justify-center h-32 border-2 border-dashed rounded-md">
                  <p className="text-muted-foreground">No important notices.</p>
             </div>
@@ -137,7 +228,7 @@ export default function PatientDashboardPage() {
         </CardHeader>
         <CardContent>
             <div className="flex flex-col md:flex-row gap-4 items-center">
-                <Image src="https://placehold.co/300x200.png" alt="Health Tip" width={300} height={200} className="rounded-md shadow-md" data-ai-hint="healthy lifestyle"/>
+                <Image src="https://placehold.co/300x200.png" alt="Health Tip" width={300} height={200} className="rounded-md shadow-md object-cover" data-ai-hint="healthy lifestyle"/>
                 <div>
                     <h3 className="text-lg font-semibold text-primary mb-2">Stay Hydrated This Summer!</h3>
                     <p className="text-muted-foreground">
