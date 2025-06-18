@@ -69,9 +69,9 @@ interface DoctorOption {
 }
 
 interface SlotConfig extends SlotFormValues {
-  id: string; // This is the document ID from Firestore
+  id: string; 
   doctorName?: string;
-  createdAt?: any; // Keep if you use it, though not in form schema
+  createdAt?: any; 
 }
 
 export default function ManageSlotsPage() {
@@ -124,28 +124,24 @@ export default function ManageSlotsPage() {
 
           slotsSnapshot.forEach(docSnap => {
             const data = docSnap.data();
-            let dayOfWeekValue: string = "Monday"; // Default
+            let dayOfWeekValue: string = "Monday"; 
 
             if (typeof data.dayOfWeek === 'string' && data.dayOfWeek) {
                 dayOfWeekValue = data.dayOfWeek;
             } else if (Array.isArray(data.dayOfWeek) && data.dayOfWeek.length > 0 && typeof data.dayOfWeek[0] === 'string') {
-                // Handle legacy array data: use the first day.
                 dayOfWeekValue = data.dayOfWeek[0];
                 console.warn(`Slot config ${docSnap.id} uses legacy array for dayOfWeek. Using first day: ${dayOfWeekValue}`);
-            } else if (data.dayOfWeek) { // If it exists but isn't a string or valid array
+            } else if (data.dayOfWeek) { 
                  console.warn(`Slot config ${docSnap.id} has an invalid dayOfWeek format: ${typeof data.dayOfWeek}. Defaulting to Monday.`);
             }
             
             newConfigs.push({
                 id: docSnap.id,
                 doctorId: data.doctorId,
-                dayOfWeek: dayOfWeekValue, // Ensured string
+                dayOfWeek: dayOfWeekValue, 
                 selectedSlots: Array.isArray(data.selectedSlots) ? data.selectedSlots : [],
                 capacityPerSlot: typeof data.capacityPerSlot === 'number' ? data.capacityPerSlot : 1,
                 doctorName: doctorNameMap.get(data.doctorId) || data.doctorId,
-                // createdAt field is not part of SlotFormValues, so not strictly needed for form reset
-                // but can be kept on SlotConfig if used elsewhere.
-                // createdAt: data.createdAt, 
             });
           });
           setSlotConfigs(newConfigs);
@@ -166,9 +162,9 @@ export default function ManageSlotsPage() {
   }, [fetchDoctors]);
 
   useEffect(() => {
-    if (!isLoadingDoctors && doctors.length > 0) { // Fetch configs only if doctors are loaded and available
+    if (!isLoadingDoctors && doctors.length > 0) { 
         fetchSlotConfigs();
-    } else if (!isLoadingDoctors && doctors.length === 0) { // No doctors, so no configs to fetch
+    } else if (!isLoadingDoctors && doctors.length === 0) { 
         setSlotConfigs([]);
         setIsSlotConfigLoading(false);
     }
@@ -178,10 +174,9 @@ export default function ManageSlotsPage() {
   const handleFormDialogOpen = (slotConfig?: SlotConfig) => {
     if (slotConfig) {
       setEditingSlotConfig(slotConfig);
-      // Ensure dayOfWeek passed to reset is a string, which should be guaranteed by fetchSlotConfigs
       form.reset({
-        ...slotConfig, // Spread existing values
-        dayOfWeek: typeof slotConfig.dayOfWeek === 'string' ? slotConfig.dayOfWeek : "Monday", // Ensure it's a string
+        ...slotConfig, 
+        dayOfWeek: typeof slotConfig.dayOfWeek === 'string' ? slotConfig.dayOfWeek : "Monday", 
         selectedSlots: Array.isArray(slotConfig.selectedSlots) ? slotConfig.selectedSlots : []
       });
     } else {
@@ -202,7 +197,6 @@ export default function ManageSlotsPage() {
         await addDoc(collection(db, "slotConfigurations"), { ...values, createdAt: serverTimestamp() });
         toast({ title: "Slot Configuration Added" });
       }
-      // Re-fetch only if doctors are present, otherwise fetchSlotConfigs won't run correctly
       if (doctors.length > 0) {
         fetchSlotConfigs();
       }
@@ -230,7 +224,7 @@ export default function ManageSlotsPage() {
         if (doctors.length > 0) {
             fetchSlotConfigs(); 
         } else {
-            setSlotConfigs([]); // Clear configs if no doctors (edge case)
+            setSlotConfigs([]); 
         }
     } catch (error: any) {
         console.error("Error deleting slot config: ", error);
@@ -366,7 +360,7 @@ export default function ManageSlotsPage() {
               <FormField
                 control={form.control}
                 name="selectedSlots"
-                render={() => ( 
+                render={({ field }) => ( 
                   <FormItem>
                     <div className="mb-2">
                       <FormLabel className="text-base flex items-center"><CalendarDays className="mr-2 h-4 w-4"/>Select Available 15-Minute Slots</FormLabel>
@@ -375,39 +369,30 @@ export default function ManageSlotsPage() {
                       </FormDescription>
                     </div>
                     <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2 border rounded-md max-h-60 overflow-y-auto">
-                      {timeSlotCheckboxOptions.map((slot) => (
-                        <FormField
-                          key={slot.id}
-                          control={form.control}
-                          name="selectedSlots"
-                          render={({ field: checkboxField }) => {
-                            return (
-                              <FormItem
-                                key={slot.id}
-                                className="flex flex-row items-center space-x-2 space-y-0 bg-secondary/30 p-2 rounded"
-                              >
-                                <FormControl>
-                                  <Checkbox
-                                    checked={checkboxField.value?.includes(slot.id)}
-                                    onCheckedChange={(checked) => {
-                                      const currentValue = checkboxField.value || [];
-                                      return checked
-                                        ? checkboxField.onChange([...currentValue, slot.id].sort()) // Keep sorted
-                                        : checkboxField.onChange(
-                                            currentValue.filter(
-                                              (value) => value !== slot.id
-                                            )
-                                          );
-                                    }}
-                                  />
-                                </FormControl>
-                                <FormLabel className="text-sm font-normal whitespace-nowrap">
-                                  {slot.label}
-                                </FormLabel>
-                              </FormItem>
-                            );
-                          }}
-                        />
+                      {timeSlotCheckboxOptions.map((slotOption) => (
+                        <FormItem
+                            key={slotOption.id}
+                            className="flex flex-row items-center space-x-2 space-y-0 bg-secondary/30 p-2 rounded"
+                        >
+                            <FormControl>
+                            <Checkbox
+                                checked={field.value?.includes(slotOption.id)}
+                                onCheckedChange={(checked) => {
+                                const currentValue = field.value || [];
+                                return checked
+                                    ? field.onChange([...currentValue, slotOption.id].sort())
+                                    : field.onChange(
+                                        currentValue.filter(
+                                        (value) => value !== slotOption.id
+                                        )
+                                    );
+                                }}
+                            />
+                            </FormControl>
+                            <FormLabel className="text-sm font-normal whitespace-nowrap">
+                            {slotOption.label}
+                            </FormLabel>
+                        </FormItem>
                       ))}
                     </div>
                     <FormMessage />
@@ -461,3 +446,4 @@ export default function ManageSlotsPage() {
     </div>
   );
 }
+
