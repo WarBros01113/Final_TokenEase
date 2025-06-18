@@ -1,0 +1,49 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default: Deny all reads and writes to prevent unintended access.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Users collection:
+    // Allow users to read their own profile.
+    // Allow authenticated users to create their own profile document.
+    // Allow users to update their own profile document.
+    match /users/{userId} {
+      allow read, update: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null;
+    }
+
+    // Appointments collection:
+    // - Patients can create appointments for themselves.
+    // - Patients can read/update their own appointments.
+    // - (Future: Doctors/Admins might have different access rights)
+    match /appointments/{appointmentId} {
+      allow create: if request.auth != null && request.resource.data.patientId == request.auth.uid;
+      allow read, update: if request.auth != null && resource.data.patientId == request.auth.uid;
+      // Example for admin/doctor read access (you'd need to define how roles are checked):
+      // allow read: if request.auth != null && (resource.data.patientId == request.auth.uid || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'doctor']);
+    }
+
+    // Doctors collection:
+    // - Authenticated users can read doctor information.
+    // - (Future: Only admins should write/update doctor information)
+    match /doctors/{doctorId} {
+      allow read: if request.auth != null;
+      // allow write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Publicly readable collections (e.g., general clinic info, test definitions if applicable)
+    // match /publicInfo/{docId} {
+    //   allow read: if true;
+    // }
+
+    // You will need to add more specific rules for other collections like
+    // slots, tests, penalties, chat messages, billing, etc.,
+    // based on your application's logic and security requirements.
+    // Always start with the principle of least privilege.
+  }
+}
