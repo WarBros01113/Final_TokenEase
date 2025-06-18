@@ -10,7 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { PlusCircle, Edit, Trash2, UserPlus, Eye, Users as UsersIcon, Loader2, Clock } from "lucide-react";
+import { PlusCircle, Edit, Trash2, UserPlus, Eye, Users as UsersIcon, Loader2, Clock, Briefcase } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useForm, Controller } from "react-hook-form";
 import * as z from "zod";
@@ -19,30 +19,34 @@ import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimes
 const generateTimeSlots = (startHour: number, endHour: number, intervalMinutes: number): { id: string, label: string }[] => {
   const slots = [];
   const startTime = new Date();
-  startTime.setHours(startHour, 0, 0, 0);
+  startTime.setHours(startHour, 0, 0, 0); // Start at 9:00 AM
 
   const endTime = new Date();
-  endTime.setHours(endHour, 0, 0, 0);
+  endTime.setHours(endHour, 0, 0, 0); // End at 6:00 PM (exclusive for last slot generation)
 
   let currentTime = new Date(startTime);
 
-  while (currentTime < endTime) {
+  // Loop until current time reaches or exceeds 5:45 PM for 6 PM end
+  while (currentTime.getHours() < endHour || (currentTime.getHours() === endHour -1 && currentTime.getMinutes() < (60-intervalMinutes+1)) ) {
+    if(currentTime.getHours() >= endHour && currentTime.getMinutes() > 0) break; // Ensure we don't go past 6PM
+
     const hours = currentTime.getHours().toString().padStart(2, '0');
     const minutes = currentTime.getMinutes().toString().padStart(2, '0');
     const timeString = `${hours}:${minutes}`;
     slots.push({ id: timeString, label: timeString });
     currentTime.setMinutes(currentTime.getMinutes() + intervalMinutes);
+    if(currentTime.getHours() === endHour && currentTime.getMinutes() === 0) break; // Stop exactly if 6:00 PM is reached by an interval
   }
   return slots;
 };
 
-const availableTimeSlotsOptions = generateTimeSlots(9, 18, 15); // 9:00 AM to 5:45 PM
+const availableTimeSlotsOptions = generateTimeSlots(9, 18, 15); // 9:00 AM up to 5:45 PM for 6 PM exclusive end
 
 const doctorFormSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(2, "Name must be at least 2 characters."),
   email: z.string().email("Invalid email address."),
-  specialization: z.string().default("Gynecology"),
+  experience: z.coerce.number().min(0, "Experience cannot be negative.").default(0),
   phoneNumber: z.string().regex(/^\d{10}$/, "Phone number must be 10 digits.").optional().or(z.literal('')),
   availabilitySlots: z.array(z.string()).min(1, { message: "Please select at least one availability slot." }),
 });
@@ -64,7 +68,7 @@ export default function ManageDoctorsPage() {
 
   const form = useForm<DoctorFormValues>({
     resolver: zodResolver(doctorFormSchema),
-    defaultValues: { name: "", email: "", specialization: "Gynecology", phoneNumber: "", availabilitySlots: [] },
+    defaultValues: { name: "", email: "", experience: 0, phoneNumber: "", availabilitySlots: [] },
   });
 
   const fetchDoctors = useCallback(async () => {
@@ -77,7 +81,7 @@ export default function ManageDoctorsPage() {
       querySnapshot.forEach((doc) => {
         fetchedDoctors.push({ id: doc.id, ...doc.data() } as Doctor);
       });
-      setDoctors(fetchedDoctors.filter(d => d.specialization === "Gynecology"));
+      setDoctors(fetchedDoctors);
     } catch (error) {
       console.error("Error fetching doctors: ", error);
       toast({ variant: "destructive", title: "Error", description: "Could not fetch doctors." });
@@ -93,17 +97,18 @@ export default function ManageDoctorsPage() {
   const handleDialogOpen = (doctor?: Doctor) => {
     if (doctor) {
       setEditingDoctor(doctor);
-      form.reset({...doctor, specialization: "Gynecology", availabilitySlots: doctor.availabilitySlots || []});
+      form.reset({...doctor, availabilitySlots: doctor.availabilitySlots || []});
     } else {
       setEditingDoctor(null);
-      form.reset({ name: "", email: "", specialization: "Gynecology", phoneNumber: "", availabilitySlots: [] });
+      form.reset({ name: "", email: "", experience: 0, phoneNumber: "", availabilitySlots: [] });
     }
     setIsDialogOpen(true);
   };
 
   const onSubmit = async (values: DoctorFormValues) => {
     setIsSubmitting(true);
-    const doctorData = { ...values, specialization: "Gynecology" };
+    // Removed specialization from doctorData
+    const doctorData = { ...values };
     try {
       if (editingDoctor) {
         const doctorRef = doc(db, "doctors", editingDoctor.id);
@@ -147,7 +152,7 @@ export default function ManageDoctorsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Manage Doctors" description="Add, edit, or remove Gynecologists from the system.">
+      <PageHeader title="Manage Doctors" description="Add, edit, or remove doctors from the system.">
         <Button onClick={() => handleDialogOpen()}>
           <UserPlus className="mr-2 h-4 w-4" /> Add New Doctor
         </Button>
@@ -156,7 +161,7 @@ export default function ManageDoctorsPage() {
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Doctor List</CardTitle>
-          <CardDescription>A list of all registered Gynecologists in the clinic.</CardDescription>
+          <CardDescription>A list of all registered doctors in the clinic.</CardDescription>
         </CardHeader>
         <CardContent>
           {doctors.length === 0 ? (
@@ -170,7 +175,7 @@ export default function ManageDoctorsPage() {
               <TableRow>
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>Specialization</TableHead>
+                <TableHead>Experience (Years)</TableHead>
                 <TableHead>Phone</TableHead>
                 <TableHead>Availability Slots</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -181,7 +186,7 @@ export default function ManageDoctorsPage() {
                 <TableRow key={doctor.id}>
                   <TableCell className="font-medium">{doctor.name}</TableCell>
                   <TableCell>{doctor.email}</TableCell>
-                  <TableCell>{doctor.specialization}</TableCell>
+                  <TableCell>{doctor.experience !== undefined ? doctor.experience : 'N/A'}</TableCell>
                   <TableCell>{doctor.phoneNumber || 'N/A'}</TableCell>
                   <TableCell className="max-w-xs truncate">
                     {(doctor.availabilitySlots && doctor.availabilitySlots.length > 0) ? doctor.availabilitySlots.join(', ') : 'Not Set'}
@@ -206,11 +211,11 @@ export default function ManageDoctorsPage() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-2xl"> {/* Increased width for more checkboxes */}
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingDoctor ? "Edit Doctor" : "Add New Doctor"}</DialogTitle>
             <DialogDescription>
-              {editingDoctor ? "Update the doctor's details." : "Fill in the details for the new Gynecologist."}
+              {editingDoctor ? "Update the doctor's details." : "Fill in the details for the new doctor."}
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -239,11 +244,11 @@ export default function ManageDoctorsPage() {
               />
               <FormField
                 control={form.control}
-                name="specialization"
+                name="experience"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Specialization</FormLabel>
-                    <FormControl><Input {...field} readOnly className="bg-muted"/></FormControl>
+                    <FormLabel className="flex items-center"><Briefcase className="mr-2 h-4 w-4"/>Experience (Years)</FormLabel>
+                    <FormControl><Input type="number" placeholder="e.g., 5" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -322,4 +327,3 @@ export default function ManageDoctorsPage() {
     </div>
   );
 }
-
