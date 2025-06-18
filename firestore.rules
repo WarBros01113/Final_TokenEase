@@ -6,8 +6,9 @@ service cloud.firestore {
 
     // Helper function to check admin role
     function isAdmin() {
-      let userDocPath = /databases/$(database)/documents/users/$(request.auth.uid);
-      return request.auth != null && exists(userDocPath) && get(userDocPath).data.role == 'admin';
+      return request.auth != null &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
     // Users collection:
@@ -31,23 +32,22 @@ service cloud.firestore {
                      ( (request.resource.data.patientId == request.auth.uid) || isAdmin() );
       allow read, update: if request.auth != null &&
                            ( (resource.data.patientId == request.auth.uid) || isAdmin() );
-      
       allow list: if request.auth != null && (
-        isAdmin() ||
-        ( // Patient listing THEIR OWN appointments: checks if patientId is the first filter
-          request.query.filters.size() > 0 &&
-          request.query.filters[0][0] == 'patientId' &&
-          request.query.filters[0][2] == request.auth.uid
+        // A: Patient listing their OWN appointments (e.g., on their "My Appointments" tab)
+        (
+            request.query.limit <= 30 && // Add a reasonable limit for safety
+            request.query.filters.size() > 0 &&
+            request.query.filters[0][0] == 'patientId' &&
+            request.query.filters[0][2] == request.auth.uid
         ) ||
-        ( // ANY authenticated user checking slot availability for a doctor on a specific date
-          request.query.filters.size() >= 2 &&
-          (
-            (request.query.filters[0][0] == 'doctorId' && request.query.filters[1][0] == 'date') ||
-            (request.query.filters[0][0] == 'date' && request.query.filters[1][0] == 'doctorId')
-          )
-        )
+        // B: ANY authenticated user checking slot availability for a specific doctor/date
+        (
+            request.query.keys().hasAll(['doctorId', 'date']) &&
+            request.query.keys().size() == 2 // Ensures ONLY doctorId and date are being queried
+        ) ||
+        // C: Admin can list with more freedom
+        isAdmin()
       );
-
       allow delete: if request.auth != null &&
                      (
                        (resource.data.patientId == request.auth.uid && resource.data.status == 'upcoming') ||
@@ -60,7 +60,7 @@ service cloud.firestore {
       allow read, list: if request.auth != null;
       allow create, update, delete: if isAdmin();
     }
-    
+
     // Slot Configurations collection:
     match /slotConfigurations/{configId} {
       allow read, list: if request.auth != null;
@@ -85,7 +85,7 @@ service cloud.firestore {
       allow create, delete: if isAdmin();
     }
 
-    // Clinic Configuration collection (e.g., global settings):
+    // Clinic Configuration collection:
     match /clinicConfiguration/globalClinicSettings {
       allow read: if request.auth != null;
       allow write: if isAdmin();
