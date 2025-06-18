@@ -6,26 +6,35 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { PlusCircle, Edit, Trash2, CalendarClock, Loader2 } from "lucide-react";
+import { PlusCircle, Edit, Trash2, CalendarClock, Loader2, CalendarDays } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import * as z from "zod";
 import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, query as firestoreQuery, orderBy, where } from "@/lib/firebase";
 
-const daysOfWeek = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const daysOfWeekOptions = [
+  { id: "Monday", label: "Monday" },
+  { id: "Tuesday", label: "Tuesday" },
+  { id: "Wednesday", label: "Wednesday" },
+  { id: "Thursday", label: "Thursday" },
+  { id: "Friday", label: "Friday" },
+  { id: "Saturday", label: "Saturday" },
+  { id: "Sunday", label: "Sunday" },
+];
 
 const slotFormSchema = z.object({
   id: z.string().optional(),
   doctorId: z.string().min(1, "Doctor is required."),
-  dayOfWeek: z.string().min(1, "Day of week is required."),
+  dayOfWeek: z.array(z.string()).nonempty({ message: "Please select at least one day." }),
   startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid start time (HH:MM)."),
   endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid end time (HH:MM)."),
   slotDurationMinutes: z.coerce.number().min(5, "Duration must be at least 5 minutes.").max(120),
-  capacityPerSlot: z.coerce.number().min(1, "Capacity must be at least 1.").max(15, "Capacity cannot exceed 15."), // Max 15 per PRD
+  capacityPerSlot: z.coerce.number().min(1, "Capacity must be at least 1.").max(15, "Capacity cannot exceed 15."),
 }).refine(data => data.startTime < data.endTime, {
   message: "End time must be after start time.",
   path: ["endTime"],
@@ -38,9 +47,10 @@ interface DoctorOption {
   name: string;
 }
 
-interface SlotConfig extends SlotFormValues {
+interface SlotConfig extends Omit<SlotFormValues, 'dayOfWeek'> {
   id: string;
-  doctorName?: string; 
+  dayOfWeek: string[]; // Ensure this is an array
+  doctorName?: string;
   createdAt?: any;
 }
 
@@ -56,13 +66,12 @@ export default function ManageSlotsPage() {
 
   const form = useForm<SlotFormValues>({
     resolver: zodResolver(slotFormSchema),
-    defaultValues: { doctorId: "", dayOfWeek: "", startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 1 },
+    defaultValues: { doctorId: "", dayOfWeek: [], startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 1 },
   });
 
   const fetchDoctors = useCallback(async () => {
-    setIsLoading(true); // Overall page loading
+    setIsLoading(true);
     try {
-      // Query without specialization filter
       const doctorsSnapshot = await getDocs(firestoreQuery(collection(db, "doctors"), orderBy("name")));
       const fetchedDoctors: DoctorOption[] = [];
       doctorsSnapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, name: doc.data().name }));
@@ -76,22 +85,24 @@ export default function ManageSlotsPage() {
   }, [toast]);
 
   const fetchSlotConfigs = useCallback(async () => {
-    if (doctors.length === 0) { // Don't fetch if no doctors
+    if (doctors.length === 0) {
         setSlotConfigs([]);
         setIsSlotConfigLoading(false);
         return;
     }
     setIsSlotConfigLoading(true);
     try {
-      const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId"), orderBy("dayOfWeek")));
+      // Order by doctorId, then by startTime. dayOfWeek is an array and cannot be directly ordered easily in Firestore.
+      const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId"), orderBy("startTime")));
       const fetchedConfigs: SlotConfig[] = [];
       const doctorNameMap = new Map(doctors.map(d => [d.id, d.name]));
       slotsSnapshot.forEach(docSnap => {
         const data = docSnap.data();
-        fetchedConfigs.push({ 
-            id: docSnap.id, 
-            ...data, 
-            doctorName: doctorNameMap.get(data.doctorId) || data.doctorId 
+        fetchedConfigs.push({
+            id: docSnap.id,
+            ...data,
+            dayOfWeek: Array.isArray(data.dayOfWeek) ? data.dayOfWeek : (typeof data.dayOfWeek === 'string' ? [data.dayOfWeek] : []), // Ensure dayOfWeek is an array
+            doctorName: doctorNameMap.get(data.doctorId) || data.doctorId
         } as SlotConfig);
       });
       setSlotConfigs(fetchedConfigs);
@@ -101,7 +112,7 @@ export default function ManageSlotsPage() {
         toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations." });
       } else {
         console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message.");
-         toast({ variant: "destructive", title: "Firestore Index Required", description: "A Firestore index is needed for slot configurations. Please check the console for a link to create it." });
+         toast({ variant: "destructive", title: "Firestore Index Required", description: "A Firestore index is needed for slot configurations (doctorId asc, startTime asc). Please check the console for a link to create it." });
       }
     } finally {
       setIsSlotConfigLoading(false);
@@ -113,13 +124,11 @@ export default function ManageSlotsPage() {
   }, [fetchDoctors]);
 
   useEffect(() => {
-    // Only fetch slots if doctors have been loaded
-    if (!isLoading && doctors.length > 0) { 
+    if (!isLoading && doctors.length > 0) {
         fetchSlotConfigs();
     } else if (!isLoading && doctors.length === 0) {
-        // No doctors, so no slots to fetch
         setSlotConfigs([]);
-        setIsSlotConfigLoading(false); 
+        setIsSlotConfigLoading(false);
     }
   }, [doctors, fetchSlotConfigs, isLoading]);
 
@@ -127,10 +136,13 @@ export default function ManageSlotsPage() {
   const handleDialogOpen = (slotConfig?: SlotConfig) => {
     if (slotConfig) {
       setEditingSlotConfig(slotConfig);
-      form.reset(slotConfig);
+      form.reset({
+        ...slotConfig,
+        dayOfWeek: Array.isArray(slotConfig.dayOfWeek) ? slotConfig.dayOfWeek : (typeof slotConfig.dayOfWeek === 'string' ? [slotConfig.dayOfWeek] : [])
+      });
     } else {
       setEditingSlotConfig(null);
-      form.reset({ doctorId: "", dayOfWeek: "", startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 1 });
+      form.reset({ doctorId: "", dayOfWeek: [], startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 1 });
     }
     setIsDialogOpen(true);
   };
@@ -146,7 +158,7 @@ export default function ManageSlotsPage() {
         await addDoc(collection(db, "slotConfigurations"), { ...values, createdAt: serverTimestamp() });
         toast({ title: "Slot Configuration Added" });
       }
-      fetchSlotConfigs(); 
+      fetchSlotConfigs();
       setIsDialogOpen(false);
       form.reset();
     } catch (error: any) {
@@ -162,14 +174,14 @@ export default function ManageSlotsPage() {
     try {
         await deleteDoc(doc(db, "slotConfigurations", slotConfigId));
         toast({ title: "Slot Configuration Deleted", variant: "destructive" });
-        fetchSlotConfigs(); 
+        fetchSlotConfigs();
     } catch (error: any) {
         console.error("Error deleting slot config:", error);
         toast({variant: "destructive", title: "Delete Error", description: error.message || "Could not delete slot configuration."})
     }
   };
 
-  if (isLoading) { 
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -199,7 +211,7 @@ export default function ManageSlotsPage() {
           <CardDescription>List of defined availability schedules for doctors.</CardDescription>
         </CardHeader>
         <CardContent>
-          {isSlotConfigLoading ? ( 
+          {isSlotConfigLoading ? (
              <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
                 <p className="ml-2">Loading configurations...</p>
@@ -215,7 +227,7 @@ export default function ManageSlotsPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Doctor</TableHead>
-                <TableHead>Day</TableHead>
+                <TableHead>Days</TableHead>
                 <TableHead>Time Range</TableHead>
                 <TableHead>Slot Duration</TableHead>
                 <TableHead>Capacity/Slot</TableHead>
@@ -226,7 +238,7 @@ export default function ManageSlotsPage() {
               {slotConfigs.map((sc) => (
                 <TableRow key={sc.id}>
                   <TableCell className="font-medium">{sc.doctorName || sc.doctorId}</TableCell>
-                  <TableCell>{sc.dayOfWeek}</TableCell>
+                  <TableCell>{(sc.dayOfWeek || []).join(', ') || 'N/A'}</TableCell>
                   <TableCell>{sc.startTime} - {sc.endTime}</TableCell>
                   <TableCell>{sc.slotDurationMinutes} mins</TableCell>
                   <TableCell>{sc.capacityPerSlot} patients</TableCell>
@@ -272,18 +284,52 @@ export default function ManageSlotsPage() {
                   </FormItem>
                 )}
               />
-               <FormField
+              <FormField
                 control={form.control}
                 name="dayOfWeek"
-                render={({ field }) => (
+                render={() => (
                   <FormItem>
-                    <FormLabel>Day of Week</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select a day" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {daysOfWeek.map(day => <SelectItem key={day} value={day}>{day}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
+                    <div className="mb-2">
+                      <FormLabel className="text-base flex items-center"><CalendarDays className="mr-2 h-4 w-4"/>Days of Week</FormLabel>
+                      <FormDescription>
+                        Select the days this configuration applies to.
+                      </FormDescription>
+                    </div>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2 border rounded-md">
+                      {daysOfWeekOptions.map((day) => (
+                        <FormField
+                          key={day.id}
+                          control={form.control}
+                          name="dayOfWeek"
+                          render={({ field }) => {
+                            return (
+                              <FormItem
+                                key={day.id}
+                                className="flex flex-row items-center space-x-2 space-y-0 bg-secondary/30 p-2 rounded"
+                              >
+                                <FormControl>
+                                  <Checkbox
+                                    checked={field.value?.includes(day.id)}
+                                    onCheckedChange={(checked) => {
+                                      return checked
+                                        ? field.onChange([...(field.value || []), day.id])
+                                        : field.onChange(
+                                            (field.value || []).filter(
+                                              (value) => value !== day.id
+                                            )
+                                          );
+                                    }}
+                                  />
+                                </FormControl>
+                                <FormLabel className="text-sm font-normal whitespace-nowrap">
+                                  {day.label}
+                                </FormLabel>
+                              </FormItem>
+                            );
+                          }}
+                        />
+                      ))}
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -349,3 +395,4 @@ export default function ManageSlotsPage() {
   );
 }
 
+    
