@@ -49,7 +49,7 @@ interface DoctorOption {
 
 interface SlotConfig extends Omit<SlotFormValues, 'dayOfWeek'> {
   id: string;
-  dayOfWeek: string[]; // Ensure this is an array
+  dayOfWeek: string[]; 
   doctorName?: string;
   createdAt?: any;
 }
@@ -60,7 +60,7 @@ export default function ManageSlotsPage() {
   const [doctors, setDoctors] = useState<DoctorOption[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSlotConfig, setEditingSlotConfig] = useState<SlotConfig | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingDoctors, setIsLoadingDoctors] = useState(true);
   const [isSlotConfigLoading, setIsSlotConfigLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -70,8 +70,9 @@ export default function ManageSlotsPage() {
   });
 
   const fetchDoctors = useCallback(async () => {
-    setIsLoading(true);
+    setIsLoadingDoctors(true);
     try {
+      // Fetch all doctors, ordered by name. No specialization filter needed.
       const doctorsSnapshot = await getDocs(firestoreQuery(collection(db, "doctors"), orderBy("name")));
       const fetchedDoctors: DoctorOption[] = [];
       doctorsSnapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, name: doc.data().name }));
@@ -80,7 +81,7 @@ export default function ManageSlotsPage() {
       console.error("Error fetching doctors for slots: ", error);
       toast({ variant: "destructive", title: "Error", description: "Could not fetch doctors." });
     } finally {
-      setIsLoading(false);
+      setIsLoadingDoctors(false);
     }
   }, [toast]);
 
@@ -92,8 +93,8 @@ export default function ManageSlotsPage() {
     }
     setIsSlotConfigLoading(true);
     try {
-      // Order by doctorId, then by startTime. dayOfWeek is an array and cannot be directly ordered easily in Firestore.
-      const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId"), orderBy("startTime")));
+      // Order by doctorId, then by startTime. dayOfWeek is an array and cannot be directly ordered easily in Firestore for complex queries.
+      const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId", "asc"), orderBy("startTime", "asc")));
       const fetchedConfigs: SlotConfig[] = [];
       const doctorNameMap = new Map(doctors.map(d => [d.id, d.name]));
       slotsSnapshot.forEach(docSnap => {
@@ -101,18 +102,18 @@ export default function ManageSlotsPage() {
         fetchedConfigs.push({
             id: docSnap.id,
             ...data,
-            dayOfWeek: Array.isArray(data.dayOfWeek) ? data.dayOfWeek : (typeof data.dayOfWeek === 'string' ? [data.dayOfWeek] : []), // Ensure dayOfWeek is an array
+            dayOfWeek: Array.isArray(data.dayOfWeek) ? data.dayOfWeek : (typeof data.dayOfWeek === 'string' ? [data.dayOfWeek] : []), 
             doctorName: doctorNameMap.get(data.doctorId) || data.doctorId
         } as SlotConfig);
       });
       setSlotConfigs(fetchedConfigs);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching slot configurations: ", error);
-      if (!(error instanceof Error && error.message.includes("firestore/failed-precondition"))) {
-        toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations." });
+      if (error.code === "failed-precondition" || (error.message && error.message.includes("firestore/failed-precondition"))) {
+         toast({ variant: "destructive", title: "Firestore Index Required", description: "A Firestore index is needed for slot configurations (doctorId asc, startTime asc). Please check the console for a link to create it, or create it manually.", duration: 10000 });
+         console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message or create it manually: collection 'slotConfigurations', fields: 'doctorId' (Ascending), 'startTime' (Ascending).");
       } else {
-        console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message.");
-         toast({ variant: "destructive", title: "Firestore Index Required", description: "A Firestore index is needed for slot configurations (doctorId asc, startTime asc). Please check the console for a link to create it." });
+        toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations." });
       }
     } finally {
       setIsSlotConfigLoading(false);
@@ -124,13 +125,13 @@ export default function ManageSlotsPage() {
   }, [fetchDoctors]);
 
   useEffect(() => {
-    if (!isLoading && doctors.length > 0) {
+    if (!isLoadingDoctors && doctors.length > 0) {
         fetchSlotConfigs();
-    } else if (!isLoading && doctors.length === 0) {
+    } else if (!isLoadingDoctors && doctors.length === 0) {
         setSlotConfigs([]);
         setIsSlotConfigLoading(false);
     }
-  }, [doctors, fetchSlotConfigs, isLoading]);
+  }, [doctors, fetchSlotConfigs, isLoadingDoctors]);
 
 
   const handleDialogOpen = (slotConfig?: SlotConfig) => {
@@ -174,14 +175,14 @@ export default function ManageSlotsPage() {
     try {
         await deleteDoc(doc(db, "slotConfigurations", slotConfigId));
         toast({ title: "Slot Configuration Deleted", variant: "destructive" });
-        fetchSlotConfigs();
+        fetchSlotConfigs(); // Refresh list
     } catch (error: any) {
         console.error("Error deleting slot config:", error);
         toast({variant: "destructive", title: "Delete Error", description: error.message || "Could not delete slot configuration."})
     }
   };
 
-  if (isLoading) {
+  if (isLoadingDoctors) {
     return (
       <div className="flex items-center justify-center h-full">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -197,7 +198,7 @@ export default function ManageSlotsPage() {
           <PlusCircle className="mr-2 h-4 w-4" /> Add Slot Configuration
         </Button>
       </PageHeader>
-      {doctors.length === 0 && !isLoading && (
+      {doctors.length === 0 && !isLoadingDoctors && (
         <Card>
             <CardContent className="pt-6 text-center text-muted-foreground">
                 <p>Please add doctors in the "Manage Doctors" section before configuring slots.</p>
@@ -220,7 +221,7 @@ export default function ManageSlotsPage() {
              <div className="text-center py-8 text-muted-foreground">
                 <CalendarClock className="mx-auto h-12 w-12 mb-4"/>
                 <p>No slot configurations found. Add one to define doctor availability.</p>
-                <p className="text-xs mt-1">If you just created an index in Firestore, it might take a moment to activate.</p>
+                <p className="text-xs mt-1">If you are seeing this after creating an index, it might take a few minutes for the index to activate.</p>
             </div>
           ) : (
           <Table>
@@ -238,7 +239,7 @@ export default function ManageSlotsPage() {
               {slotConfigs.map((sc) => (
                 <TableRow key={sc.id}>
                   <TableCell className="font-medium">{sc.doctorName || sc.doctorId}</TableCell>
-                  <TableCell>{(sc.dayOfWeek || []).join(', ') || 'N/A'}</TableCell>
+                  <TableCell>{(Array.isArray(sc.dayOfWeek) ? sc.dayOfWeek.join(', ') : sc.dayOfWeek) || 'N/A'}</TableCell>
                   <TableCell>{sc.startTime} - {sc.endTime}</TableCell>
                   <TableCell>{sc.slotDurationMinutes} mins</TableCell>
                   <TableCell>{sc.capacityPerSlot} patients</TableCell>
@@ -394,5 +395,3 @@ export default function ManageSlotsPage() {
     </div>
   );
 }
-
-    
