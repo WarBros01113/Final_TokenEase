@@ -51,6 +51,7 @@ export default function ManageSlotsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSlotConfig, setEditingSlotConfig] = useState<SlotConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSlotConfigLoading, setIsSlotConfigLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<SlotFormValues>({
@@ -59,7 +60,9 @@ export default function ManageSlotsPage() {
   });
 
   const fetchDoctors = useCallback(async () => {
+    setIsLoading(true); // Overall page loading
     try {
+      // Query without specialization filter
       const doctorsSnapshot = await getDocs(firestoreQuery(collection(db, "doctors"), orderBy("name")));
       const fetchedDoctors: DoctorOption[] = [];
       doctorsSnapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, name: doc.data().name }));
@@ -67,19 +70,26 @@ export default function ManageSlotsPage() {
     } catch (error) {
       console.error("Error fetching doctors for slots: ", error);
       toast({ variant: "destructive", title: "Error", description: "Could not fetch doctors." });
+    } finally {
+      setIsLoading(false);
     }
   }, [toast]);
 
   const fetchSlotConfigs = useCallback(async () => {
-    setIsLoading(true);
+    if (doctors.length === 0) { // Don't fetch if no doctors
+        setSlotConfigs([]);
+        setIsSlotConfigLoading(false);
+        return;
+    }
+    setIsSlotConfigLoading(true);
     try {
       const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId"), orderBy("dayOfWeek")));
       const fetchedConfigs: SlotConfig[] = [];
       const doctorNameMap = new Map(doctors.map(d => [d.id, d.name]));
-      slotsSnapshot.forEach(doc => {
-        const data = doc.data();
+      slotsSnapshot.forEach(docSnap => {
+        const data = docSnap.data();
         fetchedConfigs.push({ 
-            id: doc.id, 
+            id: docSnap.id, 
             ...data, 
             doctorName: doctorNameMap.get(data.doctorId) || data.doctorId 
         } as SlotConfig);
@@ -87,14 +97,14 @@ export default function ManageSlotsPage() {
       setSlotConfigs(fetchedConfigs);
     } catch (error) {
       console.error("Error fetching slot configurations: ", error);
-      // Do not toast if it's an index error, as Firebase console provides a link
       if (!(error instanceof Error && error.message.includes("firestore/failed-precondition"))) {
         toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations." });
       } else {
         console.warn("Firestore query requires an index. Please create it using the link in the Firebase console error message.");
+         toast({ variant: "destructive", title: "Firestore Index Required", description: "A Firestore index is needed for slot configurations. Please check the console for a link to create it." });
       }
     } finally {
-      setIsLoading(false);
+      setIsSlotConfigLoading(false);
     }
   }, [toast, doctors]);
 
@@ -103,15 +113,15 @@ export default function ManageSlotsPage() {
   }, [fetchDoctors]);
 
   useEffect(() => {
-    if (doctors.length > 0) { 
+    // Only fetch slots if doctors have been loaded
+    if (!isLoading && doctors.length > 0) { 
         fetchSlotConfigs();
-    } else {
-        // If doctors array is empty (either initially or after fetchDoctors found none),
-        // ensure slots are cleared and loading is set to false.
+    } else if (!isLoading && doctors.length === 0) {
+        // No doctors, so no slots to fetch
         setSlotConfigs([]);
-        setIsLoading(false); 
+        setIsSlotConfigLoading(false); 
     }
-  }, [doctors, fetchSlotConfigs]);
+  }, [doctors, fetchSlotConfigs, isLoading]);
 
 
   const handleDialogOpen = (slotConfig?: SlotConfig) => {
@@ -136,7 +146,7 @@ export default function ManageSlotsPage() {
         await addDoc(collection(db, "slotConfigurations"), { ...values, createdAt: serverTimestamp() });
         toast({ title: "Slot Configuration Added" });
       }
-      fetchSlotConfigs(); // Re-fetch to update the list, will use the new index if created
+      fetchSlotConfigs(); 
       setIsDialogOpen(false);
       form.reset();
     } catch (error: any) {
@@ -152,14 +162,14 @@ export default function ManageSlotsPage() {
     try {
         await deleteDoc(doc(db, "slotConfigurations", slotConfigId));
         toast({ title: "Slot Configuration Deleted", variant: "destructive" });
-        fetchSlotConfigs(); // Re-fetch
+        fetchSlotConfigs(); 
     } catch (error: any) {
         console.error("Error deleting slot config:", error);
         toast({variant: "destructive", title: "Delete Error", description: error.message || "Could not delete slot configuration."})
     }
   };
 
-  if (isLoading && doctors.length === 0) { 
+  if (isLoading) { 
     return (
       <div className="flex items-center justify-center h-full">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -189,7 +199,7 @@ export default function ManageSlotsPage() {
           <CardDescription>List of defined availability schedules for doctors.</CardDescription>
         </CardHeader>
         <CardContent>
-          {isLoading ? ( // Simplified loading check here for slot configs specifically
+          {isSlotConfigLoading ? ( 
              <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
                 <p className="ml-2">Loading configurations...</p>
@@ -308,7 +318,7 @@ export default function ManageSlotsPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Slot Duration (minutes)</FormLabel>
-                    <FormControl><Input type="number" {...field} onChange={e => field.onChange(parseInt(e.target.value,10))} /></FormControl>
+                    <FormControl><Input type="number" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -319,7 +329,7 @@ export default function ManageSlotsPage() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Max Patients Per Individual Slot</FormLabel>
-                    <FormControl><Input type="number" {...field} onChange={e => field.onChange(parseInt(e.target.value,10))} /></FormControl>
+                    <FormControl><Input type="number" {...field} /></FormControl>
                     <FormDescription>Capacity for each generated slot (e.g. 9:00-9:30). System cap: 15.</FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -338,3 +348,4 @@ export default function ManageSlotsPage() {
     </div>
   );
 }
+
