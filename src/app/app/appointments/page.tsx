@@ -1,3 +1,4 @@
+
 "use client";
 
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -7,116 +8,283 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { CalendarPlus, CheckCircle, Clock, Users, Video } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CalendarPlus, CheckCircle, Users, Video, Loader2 } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
 import { useForm, Controller } from "react-hook-form";
 import * as z from "zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Link from "next/link";
+import { useAuth } from "@/contexts/AuthContext";
+import { db, collection, getDocs, addDoc, serverTimestamp, query as firestoreQuery, where, orderBy, doc, Timestamp } from "@/lib/firebase";
 
 const appointmentFormSchema = z.object({
   doctorId: z.string().min(1, "Please select a doctor."),
   date: z.date({ required_error: "Please select a date." }),
-  timeSlotId: z.string().min(1, "Please select a time slot."),
+  timeSlotId: z.string().min(1, "Please select a time slot."), // This will be composite: "startTime_slotConfigId"
 });
 
 type AppointmentFormValues = z.infer<typeof appointmentFormSchema>;
 
-// Mock data
-const mockDoctors = [
-  { id: "doc1", name: "Dr. Alice Smith", specialization: "Cardiologist" },
-  { id: "doc2", name: "Dr. Bob Johnson", specialization: "Pediatrician" },
-  { id: "doc3", name: "Dr. Carol Williams", specialization: "Dermatologist" },
-];
+interface DoctorOption {
+  id: string;
+  name: string;
+  specialization: string; // Should be "Gynecology"
+}
 
-const mockTimeSlots = [
-  { id: "slot1", time: "09:00 AM - 09:30 AM", available: true, capacity: 15, booked: 5 },
-  { id: "slot2", time: "09:30 AM - 10:00 AM", available: true, capacity: 15, booked: 12 },
-  { id: "slot3", time: "10:00 AM - 10:30 AM", available: false, capacity: 15, booked: 15 },
-  { id: "slot4", time: "10:30 AM - 11:00 AM", available: true, capacity: 15, booked: 2 },
-];
+interface TimeSlot {
+  id: string; // Composite: "startTime_slotConfigId" e.g., "09:00_cfg123"
+  time: string; // Display time e.g., "09:00 AM - 09:30 AM"
+  available: boolean;
+  capacity: number;
+  booked: number;
+  slotConfigId: string; // To link back to the configuration
+  startTime: string; // "HH:MM" for storing
+}
 
-const mockBookedAppointments = [
-  { id: "appt1", doctorName: "Dr. Alice Smith", date: "2024-08-20", time: "09:00 AM", status: "Upcoming", type: "In-Person" },
-  { id: "appt2", doctorName: "Dr. Bob Johnson", date: "2024-08-22", time: "10:30 AM", status: "Upcoming", type: "Video Call" },
-  { id: "appt3", doctorName: "Dr. Carol Williams", date: "2024-07-15", time: "02:00 PM", status: "Completed", type: "In-Person" },
-];
-
+interface BookedAppointment {
+  id: string;
+  doctorName: string;
+  date: string; // ISO String
+  time: string; // Display time
+  status: 'upcoming' | 'active' | 'completed' | 'cancelled';
+  type: string; // "In-Person" for now
+  patientId: string;
+}
 
 export default function AppointmentsPage() {
+  const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
-  const [selectedDoctor, setSelectedDoctor] = useState<string | null>(null);
-  const [availableSlots, setAvailableSlots] = useState(mockTimeSlots); // This would be fetched based on doctor and date
+  const [doctors, setDoctors] = useState<DoctorOption[]>([]);
+  const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
+  const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>([]);
+  const [bookedAppointments, setBookedAppointments] = useState<BookedAppointment[]>([]);
+  
+  const [isLoadingDoctors, setIsLoadingDoctors] = useState(true);
+  const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+  const [isLoadingBookedAppointments, setIsLoadingBookedAppointments] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<AppointmentFormValues>({
     resolver: zodResolver(appointmentFormSchema),
   });
 
-  const { control, handleSubmit, watch, reset } = form;
+  const { control, handleSubmit, watch, reset, setValue } = form;
   const selectedDate = watch("date");
 
-  useEffect(() => {
-    if (selectedDoctor && selectedDate) {
-      // In a real app, fetch available slots for the selected doctor and date
-      // For now, just use mockTimeSlots and filter or modify as needed
-      console.log("Fetching slots for", selectedDoctor, selectedDate.toDateString());
-      // Example: randomly make some slots unavailable based on date/doctor
-      const updatedSlots = mockTimeSlots.map(slot => ({
-        ...slot,
-        available: Math.random() > 0.3 && (slot.capacity - slot.booked > 0), 
-      }));
-      setAvailableSlots(updatedSlots);
+  const fetchDoctors = useCallback(async () => {
+    setIsLoadingDoctors(true);
+    try {
+      const q = firestoreQuery(collection(db, "doctors"), where("specialization", "==", "Gynecology"), orderBy("name"));
+      const snapshot = await getDocs(q);
+      const fetchedDoctors: DoctorOption[] = [];
+      snapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, ...doc.data() } as DoctorOption));
+      setDoctors(fetchedDoctors);
+    } catch (error) {
+      console.error("Error fetching doctors:", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not fetch doctors." });
+    } finally {
+      setIsLoadingDoctors(false);
     }
-  }, [selectedDoctor, selectedDate]);
+  }, [toast]);
+
+  const fetchBookedAppointments = useCallback(async (patientId: string) => {
+    setIsLoadingBookedAppointments(true);
+    try {
+        const q = firestoreQuery(
+            collection(db, "appointments"), 
+            where("patientId", "==", patientId), 
+            orderBy("date", "desc"), // Show recent first or upcoming
+            orderBy("time", "desc")
+        );
+        const snapshot = await getDocs(q);
+        const fetched: BookedAppointment[] = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            fetched.push({
+                id: doc.id,
+                doctorName: data.doctorName,
+                date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
+                time: data.appointmentTimeDisplay || data.time, // Use a display friendly time
+                status: data.status,
+                type: "In-Person", // Assuming all are in-person
+                patientId: data.patientId,
+            });
+        });
+        setBookedAppointments(fetched);
+    } catch (error) {
+        console.error("Error fetching booked appointments:", error);
+        toast({variant: "destructive", title: "Error", description: "Could not load your appointments."})
+    } finally {
+        setIsLoadingBookedAppointments(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    fetchDoctors();
+    if (user && !authLoading) {
+      fetchBookedAppointments(user.uid);
+    }
+  }, [fetchDoctors, user, authLoading, fetchBookedAppointments]);
+
+  // Generate slots when doctor and date change
+  useEffect(() => {
+    if (selectedDoctorId && selectedDate && user) {
+      const generateAndFetchSlots = async () => {
+        setIsLoadingSlots(true);
+        setAvailableSlots([]);
+        try {
+          const dayOfWeek = selectedDate.toLocaleDateString('en-US', { weekday: 'long' });
+          const dateString = selectedDate.toISOString().split('T')[0];
+
+          // 1. Fetch slot configurations for the selected doctor and day
+          const slotConfigsRef = collection(db, "slotConfigurations");
+          const qConfigs = firestoreQuery(
+            slotConfigsRef,
+            where("doctorId", "==", selectedDoctorId),
+            where("dayOfWeek", "==", dayOfWeek)
+          );
+          const configSnapshot = await getDocs(qConfigs);
+          if (configSnapshot.empty) {
+            setAvailableSlots([]);
+            setIsLoadingSlots(false);
+            return;
+          }
+
+          const generatedSlots: TimeSlot[] = [];
+          
+          // 2. For each configuration, generate individual slots
+          for (const confDoc of configSnapshot.docs) {
+            const config = confDoc.data() as { startTime: string, endTime: string, slotDurationMinutes: number, capacityPerSlot: number };
+            let current = new Date(`${dateString}T${config.startTime}:00`);
+            const end = new Date(`${dateString}T${config.endTime}:00`);
+
+            while (current < end) {
+              const slotStart = current;
+              const slotEnd = new Date(slotStart.getTime() + config.slotDurationMinutes * 60000);
+              
+              if (slotEnd > end) break; // Don't create slot if it exceeds master end time
+
+              const startTimeStr = `${slotStart.getHours().toString().padStart(2,'0')}:${slotStart.getMinutes().toString().padStart(2,'0')}`;
+              
+              generatedSlots.push({
+                id: `${startTimeStr}_${confDoc.id}`, // Unique ID for the specific slot instance
+                time: `${startTimeStr} - ${slotEnd.getHours().toString().padStart(2,'0')}:${slotEnd.getMinutes().toString().padStart(2,'0')}`,
+                available: true, // Will be checked against bookings next
+                capacity: config.capacityPerSlot,
+                booked: 0, // Will be updated
+                slotConfigId: confDoc.id,
+                startTime: startTimeStr,
+              });
+              current = slotEnd;
+            }
+          }
+
+          // 3. Fetch existing bookings for this doctor on this date to update slot availability/booked counts
+          if (generatedSlots.length > 0) {
+            const appointmentsRef = collection(db, "appointments");
+            const qBookings = firestoreQuery(
+                appointmentsRef,
+                where("doctorId", "==", selectedDoctorId),
+                where("date", "==", dateString)
+            );
+            const bookingsSnapshot = await getDocs(qBookings);
+            const bookingsOnDate = bookingsSnapshot.docs.map(d => d.data());
+
+            generatedSlots.forEach(slot => {
+                const bookingsInSlot = bookingsOnDate.filter(b => b.appointmentTime === slot.startTime && b.slotConfigId === slot.slotConfigId);
+                slot.booked = bookingsInSlot.length;
+                if (slot.booked >= slot.capacity) {
+                    slot.available = false;
+                }
+            });
+          }
+          setAvailableSlots(generatedSlots);
+        } catch (error) {
+          console.error("Error generating/fetching slots:", error);
+          toast({ variant: "destructive", title: "Error", description: "Could not load available slots." });
+        } finally {
+          setIsLoadingSlots(false);
+        }
+      };
+      generateAndFetchSlots();
+    } else {
+      setAvailableSlots([]);
+    }
+  }, [selectedDoctorId, selectedDate, user, toast]);
 
   async function onSubmit(data: AppointmentFormValues) {
-    setIsSubmitting(true);
-    console.log("Booking appointment:", data);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // Simulate checking capacity (15 patients per doctor per slot)
-    const selectedSlot = availableSlots.find(slot => slot.id === data.timeSlotId);
-    if (selectedSlot && selectedSlot.booked >= selectedSlot.capacity) {
+    if (!user || user.isBlocked) {
         toast({
             variant: "destructive",
-            title: "Booking Failed",
-            description: "Selected time slot is full. Please choose another.",
+            title: "Booking Restricted",
+            description: user?.isBlocked ? `Your account is blocked for bookings until ${new Date(user.blockedUntil || '').toLocaleDateString()}.` : "You must be logged in to book.",
         });
+        return;
+    }
+
+    setIsSubmitting(true);
+    const selectedSlot = availableSlots.find(slot => slot.id === data.timeSlotId);
+    const doctor = doctors.find(doc => doc.id === data.doctorId);
+
+    if (!selectedSlot || !doctor || !selectedDate) {
+      toast({ variant: "destructive", title: "Booking Error", description: "Invalid selection. Please try again." });
+      setIsSubmitting(false);
+      return;
+    }
+    
+    if (selectedSlot.booked >= selectedSlot.capacity) {
+        toast({ variant: "destructive", title: "Booking Failed", description: "Selected time slot is full. Please choose another."});
         setIsSubmitting(false);
         return;
     }
 
-    // Mock penalty check - assume this is handled server-side
-    // For now, always successful if slot is not full
-    const hasPenalty = false; // Math.random() > 0.8; // Simulate 20% chance of penalty
-    if (hasPenalty) {
-         toast({
-            variant: "destructive",
-            title: "Booking Blocked",
-            description: "You have too many missed appointments. Booking is temporarily disabled.",
-        });
-        setIsSubmitting(false);
-        return;
+    try {
+      const appointmentData = {
+        patientId: user.uid,
+        patientName: user.displayName || user.fullName,
+        doctorId: doctor.id,
+        doctorName: doctor.name,
+        specialization: doctor.specialization,
+        date: selectedDate.toISOString().split('T')[0], // Store as YYYY-MM-DD string
+        time: selectedSlot.startTime, // Store actual start time e.g. "09:00"
+        appointmentTime: selectedSlot.startTime, // Redundant, but might be used by other parts for specific time
+        appointmentTimeDisplay: selectedSlot.time, // For display "09:00 AM - 09:30 AM"
+        slotConfigId: selectedSlot.slotConfigId,
+        status: 'upcoming', // Initial status
+        createdAt: serverTimestamp(),
+        // tokenNumber: will be assigned by a backend process or upon check-in ideally
+      };
+      await addDoc(collection(db, "appointments"), appointmentData);
+      
+      toast({
+        title: "Appointment Booked!",
+        description: `Your appointment with ${doctor.name} on ${selectedDate.toLocaleDateString()} at ${selectedSlot.time} is confirmed.`,
+        action: <CheckCircle className="text-green-500" />,
+      });
+      reset(); 
+      setSelectedDoctorId(null);
+      setAvailableSlots([]);
+      fetchBookedAppointments(user.uid); // Refresh booked list
+    } catch (error: any) {
+        console.error("Error booking appointment: ", error);
+        toast({ variant: "destructive", title: "Booking Error", description: error.message || "Could not book appointment."});
+    } finally {
+      setIsSubmitting(false);
     }
-
-    toast({
-      title: "Appointment Booked!",
-      description: `Your appointment with Dr. ${mockDoctors.find(doc => doc.id === data.doctorId)?.name} on ${data.date.toLocaleDateString()} at ${availableSlots.find(slot => slot.id === data.timeSlotId)?.time} is confirmed.`,
-      action: <CheckCircle className="text-green-500" />,
-    });
-    reset(); // Reset form
-    setSelectedDoctor(null); 
-    setIsSubmitting(false);
-    // Potentially refetch booked appointments here or navigate
   }
+
+  if (authLoading || isLoadingDoctors) {
+    return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
+  }
+  if (!user && !authLoading) {
+    return <div className="text-center p-8">Please log in to manage appointments.</div>;
+  }
+
 
   return (
     <div className="space-y-6">
       <PageHeader title="Appointments" description="Book new appointments and manage existing ones.">
-        {/* Optional: Add a quick action button here if needed */}
       </PageHeader>
 
       <Tabs defaultValue="book">
@@ -128,7 +296,7 @@ export default function AppointmentsPage() {
           <Card className="shadow-lg">
             <CardHeader>
               <CardTitle className="flex items-center"><CalendarPlus className="mr-2 h-6 w-6 text-primary" /> Book a New Appointment</CardTitle>
-              <CardDescription>Select a doctor, date, and time slot for your appointment.</CardDescription>
+              <CardDescription>Select a Gynecologist, date, and time slot for your appointment.</CardDescription>
             </CardHeader>
             <CardContent>
               <Form {...form}>
@@ -139,14 +307,14 @@ export default function AppointmentsPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Select Doctor</FormLabel>
-                        <Select onValueChange={(value) => { field.onChange(value); setSelectedDoctor(value); }} defaultValue={field.value}>
+                        <Select onValueChange={(value) => { field.onChange(value); setSelectedDoctorId(value); setValue("timeSlotId", ""); setAvailableSlots([]); }} defaultValue={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Choose a doctor" />
+                              <SelectValue placeholder="Choose a Gynecologist" />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {mockDoctors.map(doc => (
+                            {doctors.map(doc => (
                               <SelectItem key={doc.id} value={doc.id}>
                                 {doc.name} ({doc.specialization})
                               </SelectItem>
@@ -158,7 +326,7 @@ export default function AppointmentsPage() {
                     )}
                   />
 
-                  {selectedDoctor && (
+                  {selectedDoctorId && (
                     <FormField
                       control={control}
                       name="date"
@@ -169,8 +337,8 @@ export default function AppointmentsPage() {
                             <Calendar
                               mode="single"
                               selected={field.value}
-                              onSelect={field.onChange}
-                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate() - 1)) } // Disable past dates
+                              onSelect={(date) => { field.onChange(date); setValue("timeSlotId", ""); setAvailableSlots([]); }}
+                              disabled={(date) => date < new Date(new Date().setDate(new Date().getDate())) } // Disable past dates, allow today
                               initialFocus
                               className="rounded-md border self-start"
                             />
@@ -181,14 +349,15 @@ export default function AppointmentsPage() {
                     />
                   )}
 
-                  {selectedDoctor && selectedDate && (
+                  {selectedDoctorId && selectedDate && (
                     <FormField
                       control={control}
                       name="timeSlotId"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Available Time Slots</FormLabel>
-                          {availableSlots.length > 0 ? (
+                          <FormLabel>Available Time Slots {isLoadingSlots && <Loader2 className="inline ml-2 h-4 w-4 animate-spin" />}</FormLabel>
+                          {!isLoadingSlots && availableSlots.length === 0 && <p className="text-muted-foreground text-sm">No slots available for this selection, or all spots are booked. Try another date or doctor.</p>}
+                          {availableSlots.length > 0 && (
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                               {availableSlots.map(slot => (
                                 <Button
@@ -197,17 +366,15 @@ export default function AppointmentsPage() {
                                   variant={field.value === slot.id ? "default" : "outline"}
                                   onClick={() => field.onChange(slot.id)}
                                   disabled={!slot.available || (slot.booked >= slot.capacity)}
-                                  className={`w-full h-auto py-3 flex flex-col items-center justify-center ${!slot.available || (slot.booked >= slot.capacity) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                  className={`w-full h-auto py-3 flex flex-col items-center justify-center ${(!slot.available || (slot.booked >= slot.capacity)) ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
-                                  <span className="text-sm font-medium">{slot.time}</span>
+                                  <span className="text-sm font-medium">{slot.time.split(' - ')[0]}</span>
                                   <span className="text-xs text-muted-foreground">
-                                    {slot.available && (slot.capacity - slot.booked > 0) ? `${slot.capacity - slot.booked} spots left` : 'Full / Unavailable'}
+                                    {slot.available && (slot.capacity - slot.booked > 0) ? `${slot.capacity - slot.booked} spots` : 'Full'}
                                   </span>
                                 </Button>
                               ))}
                             </div>
-                          ) : (
-                            <p className="text-muted-foreground">No slots available for this date/doctor. Please try another selection.</p>
                           )}
                           <FormMessage />
                         </FormItem>
@@ -215,9 +382,10 @@ export default function AppointmentsPage() {
                     />
                   )}
                   
-                  <Button type="submit" className="w-full md:w-auto bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isSubmitting || !selectedDoctor || !selectedDate || !watch("timeSlotId")}>
-                    {isSubmitting ? "Booking..." : "Book Appointment"}
+                  <Button type="submit" className="w-full md:w-auto bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isSubmitting || !selectedDoctorId || !selectedDate || !watch("timeSlotId") || isLoadingSlots || user?.isBlocked}>
+                    {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin"/>Booking...</> : (user?.isBlocked ? "Booking Restricted" : "Book Appointment")}
                   </Button>
+                   {user?.isBlocked && <p className="text-sm text-destructive">Your account is currently restricted from booking new appointments.</p>}
                 </form>
               </Form>
             </CardContent>
@@ -230,29 +398,30 @@ export default function AppointmentsPage() {
               <CardDescription>Review your upcoming and past appointments.</CardDescription>
             </CardHeader>
             <CardContent>
-              {mockBookedAppointments.length > 0 ? (
+              {isLoadingBookedAppointments ? (
+                 <div className="flex items-center justify-center py-8"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading your appointments...</p></div>
+              ) : bookedAppointments.length > 0 ? (
                 <div className="space-y-4">
-                  {mockBookedAppointments.map(appt => (
-                    <Card key={appt.id} className={`p-4 ${appt.status === 'Completed' ? 'bg-muted/50' : 'bg-secondary/30'}`}>
+                  {bookedAppointments.map(appt => (
+                    <Card key={appt.id} className={`p-4 ${appt.status === 'completed' || appt.status === 'cancelled' ? 'bg-muted/50' : 'bg-secondary/30'}`}>
                       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
                         <div>
                           <h3 className="font-semibold text-primary">{appt.doctorName}</h3>
                           <p className="text-sm text-muted-foreground">
-                            {new Date(appt.date).toLocaleDateString()} at {appt.time}
+                            {new Date(appt.date).toLocaleDateString()} at {appt.time} 
                           </p>
-                          <p className="text-xs">Type: {appt.type === 'In-Person' ? 
-                            <span className="inline-flex items-center"><Users className="w-3 h-3 mr-1"/>In-Person</span> : 
-                            <span className="inline-flex items-center"><Video className="w-3 h-3 mr-1"/>Video Call</span>}
-                          </p>
+                           <p className="text-xs">Type: <span className="inline-flex items-center"><Users className="w-3 h-3 mr-1"/>In-Person</span></p>
                         </div>
                         <div className="flex flex-col items-start sm:items-end">
-                           <span className={`px-2 py-1 text-xs rounded-full font-medium
-                            ${appt.status === 'Upcoming' ? 'bg-blue-100 text-blue-700' :
-                              appt.status === 'Completed' ? 'bg-green-100 text-green-700' :
+                           <span className={`px-2 py-1 text-xs rounded-full font-medium capitalize
+                            ${appt.status === 'upcoming' ? 'bg-blue-100 text-blue-700' :
+                              appt.status === 'active' ? 'bg-green-100 text-green-700' :
+                              appt.status === 'completed' ? 'bg-gray-100 text-gray-700' :
+                              appt.status === 'cancelled' ? 'bg-red-100 text-red-700' :
                               'bg-gray-100 text-gray-700'}`}>
                             {appt.status}
                           </span>
-                          {appt.status === 'Upcoming' && (
+                          {(appt.status === 'upcoming' || appt.status === 'active') && (
                             <Button variant="link" size="sm" asChild className="p-0 h-auto mt-1">
                                 <Link href={`/app/appointments/${appt.id}/status`}>View Details/Track Token</Link>
                             </Button>

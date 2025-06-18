@@ -1,16 +1,19 @@
+
 "use client";
 
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter } from "@/components/ui/table";
-import { CheckCircle, CreditCard, Download, Loader2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter as ShadTableFooter } from "@/components/ui/table"; // Renamed TableFooter import
+import { CheckCircle, CreditCard, Download, Loader2 as LoaderIcon } from "lucide-react"; // Renamed Loader2
+import { useState, useEffect, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import Image from "next/image";
+import { useAuth } from "@/contexts/AuthContext";
+import { db, collection, getDocs, doc, updateDoc, query as firestoreQuery, where, orderBy, Timestamp } from "@/lib/firebase";
 
 interface BillItem {
-  id: string;
+  id: string; // usually corresponds to a testId or serviceId
   description: string;
   quantity: number;
   unitPrice: number;
@@ -18,141 +21,160 @@ interface BillItem {
 }
 
 interface Bill {
-  id: string;
+  id: string; // Firestore document ID
   appointmentId: string;
-  date: string;
+  date: string; // ISO Date string (YYYY-MM-DD)
   doctorName: string;
   items: BillItem[];
   subtotal: number;
-  tax: number;
-  totalAmount: number;
+  tax: number; // Store as number
+  totalAmount: number; // Store as number
   status: 'Pending' | 'Paid' | 'Failed';
+  patientId: string;
+  createdAt?: Timestamp; // Firestore timestamp
+  orderId?: string; // Razorpay order ID if payment initiated
+  paymentId?: string; // Razorpay payment ID on success
 }
 
-const mockBills: Bill[] = [
-  {
-    id: "bill001",
-    appointmentId: "appt1",
-    date: "2024-08-20",
-    doctorName: "Dr. Alice Smith",
-    items: [
-      { id: "item1", description: "Consultation Fee", quantity: 1, unitPrice: 150, total: 150 },
-      { id: "item2", description: "ECG Test", quantity: 1, unitPrice: 75, total: 75 },
-      { id: "item3", description: "Blood Test Panel", quantity: 1, unitPrice: 120, total: 120 },
-    ],
-    subtotal: 345,
-    tax: 34.50, // 10% tax
-    totalAmount: 379.50,
-    status: 'Pending',
-  },
-  {
-    id: "bill002",
-    appointmentId: "appt3",
-    date: "2024-07-15",
-    doctorName: "Dr. Carol Williams",
-    items: [
-      { id: "item4", description: "Consultation Fee", quantity: 1, unitPrice: 120, total: 120 },
-      { id: "item5", description: "Skin Biopsy", quantity: 1, unitPrice: 200, total: 200 },
-    ],
-    subtotal: 320,
-    tax: 32,
-    totalAmount: 352,
-    status: 'Paid',
-  }
-];
-
-// This is a simplified Razorpay mock. A real integration needs their SDK.
 declare global {
   interface Window { Razorpay: any; }
 }
 
 export default function BillingPage() {
-  const [bills, setBills] = useState<Bill[]>(mockBills);
+  const { user, loading: authLoading } = useAuth();
+  const [bills, setBills] = useState<Bill[]>([]);
   const [selectedBill, setSelectedBill] = useState<Bill | null>(null);
   const [isPaying, setIsPaying] = useState(false);
+  const [isLoadingBills, setIsLoadingBills] = useState(true);
   const { toast } = useToast();
 
+  const fetchBills = useCallback(async (patientId: string) => {
+    setIsLoadingBills(true);
+    try {
+      const billsRef = collection(db, "bills");
+      const q = firestoreQuery(billsRef, where("patientId", "==", patientId), orderBy("createdAt", "desc"));
+      const snapshot = await getDocs(q);
+      const fetchedBills: Bill[] = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        fetchedBills.push({
+          id: doc.id,
+          ...data,
+          date: data.date instanceof Timestamp ? data.date.toDate().toISOString().split('T')[0] : data.date,
+        } as Bill);
+      });
+      setBills(fetchedBills);
+    } catch (error) {
+      console.error("Error fetching bills:", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not load your bills." });
+    } finally {
+      setIsLoadingBills(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (user && !authLoading) {
+      fetchBills(user.uid);
+    } else if (!authLoading && !user) {
+        setIsLoadingBills(false); // Not logged in, no bills to load
+    }
+  }, [user, authLoading, fetchBills]);
+
   const handlePayBill = async (bill: Bill) => {
+    if (!user) {
+        toast({variant: "destructive", title: "Authentication Error", description: "Please log in to proceed with payment."});
+        return;
+    }
     setSelectedBill(bill);
     setIsPaying(true);
 
-    // Simulate creating an order with Razorpay
-    // In a real app, this would be a server action call
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API delay
-    const orderDetails = {
-      amount: bill.totalAmount * 100, // Amount in paise
-      currency: "INR",
-      receipt: bill.id,
-    };
+    // TODO: In a real app, this order creation would be a server action call to a Firebase Function
+    // This function would securely interact with Razorpay SDK to create an order and return order_id
+    // For now, simulating client-side, which is NOT secure for production key management.
+    // Ensure `process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID` is set in your .env.local
+    const razorpayKeyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+    if (!razorpayKeyId) {
+        toast({variant: "destructive", title: "Configuration Error", description: "Razorpay Key ID is not configured."});
+        setIsPaying(false);
+        return;
+    }
 
-    // Load Razorpay SDK if not already loaded
+    // Simulate creating an order and getting an order_id (mocked for now)
+    const mockOrderId = `order_${Date.now()}_${bill.id.substring(0,5)}`; 
+    await updateDoc(doc(db, "bills", bill.id), { orderId: mockOrderId, status: 'Pending' }); // Update bill with orderId
+
     const script = document.createElement("script");
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
     script.onload = () => {
       const options = {
-        key: "YOUR_RAZORPAY_KEY_ID", // Replace with your actual key_id
-        amount: orderDetails.amount,
-        currency: orderDetails.currency,
+        key: razorpayKeyId,
+        amount: bill.totalAmount * 100, // Amount in paise
+        currency: "INR",
         name: "TokenEase Clinic",
         description: `Payment for Bill #${bill.id}`,
-        image: "https://placehold.co/100x100.png?text=TE", // Your logo
-        order_id: `mock_order_${Date.now()}`, // This would come from your server in a real app
-        handler: function (response: any) {
-          // alert(response.razorpay_payment_id);
-          // alert(response.razorpay_order_id);
-          // alert(response.razorpay_signature);
-          // This function is called when payment is successful
-          // Update payment status in Firestore here (via Server Action)
-          toast({
-            title: "Payment Successful!",
-            description: `Payment ID: ${response.razorpay_payment_id}`,
-            action: <CheckCircle className="text-green-500" />
-          });
-          setBills(prevBills => prevBills.map(b => b.id === bill.id ? {...b, status: 'Paid'} : b));
-          setIsPaying(false);
-          setSelectedBill(null);
+        image: "https://placehold.co/100x100.png?text=TE", 
+        order_id: mockOrderId, 
+        handler: async function (response: any) {
+          try {
+            await updateDoc(doc(db, "bills", bill.id), {
+              status: 'Paid',
+              paymentId: response.razorpay_payment_id,
+              razorpay_order_id: response.razorpay_order_id, // Store Razorpay's order_id as well
+              razorpay_signature: response.razorpay_signature,
+            });
+            toast({
+              title: "Payment Successful!",
+              description: `Payment ID: ${response.razorpay_payment_id}`,
+              action: <CheckCircle className="text-green-500" />
+            });
+            fetchBills(user.uid); // Refresh bills
+          } catch (dbError) {
+             console.error("Error updating bill status:", dbError);
+             toast({variant: "destructive", title: "DB Update Error", description: "Payment was successful but failed to update status."});
+          } finally {
+            setIsPaying(false);
+            setSelectedBill(null);
+          }
         },
         prefill: {
-          name: "Test User", // Prefill user details
-          email: "test.user@example.com",
-          contact: "9999999999",
+          name: user.displayName || user.fullName || "Patient",
+          email: user.email,
+          contact: user.phoneNumber || "",
         },
         notes: {
-          address: "TokenEase Clinic Corporate Office",
+          bill_id: bill.id,
+          patient_uid: user.uid,
         },
         theme: {
-          color: "#7EC4CF", // Your primary color
+          color: "#7EC4CF", 
         },
         modal: {
             ondismiss: function(){
-                // This function is called when the modal is closed by the user
-                toast({
-                    variant: "default",
-                    title: "Payment Cancelled",
-                    description: "Payment process was cancelled.",
-                });
+                toast({ title: "Payment Cancelled", description: "Payment process was cancelled by user."});
                 setIsPaying(false);
                 setSelectedBill(null);
+                // Optionally update bill status to 'Failed' or 'Cancelled' if order was created
+                // updateDoc(doc(db, "bills", bill.id), { status: 'Failed' });
             }
         }
       };
       const rzp1 = new window.Razorpay(options);
-      rzp1.on('payment.failed', function (response: any){
-        // alert(response.error.code);
-        // alert(response.error.description);
-        // alert(response.error.source);
-        // alert(response.error.step);
-        // alert(response.error.reason);
-        // alert(response.error.metadata.order_id);
-        // alert(response.error.metadata.payment_id);
-        toast({
-            variant: "destructive",
-            title: "Payment Failed",
-            description: response.error.description || "An error occurred during payment.",
-        });
-        setBills(prevBills => prevBills.map(b => b.id === bill.id ? {...b, status: 'Failed'} : b));
-        setIsPaying(false);
-        setSelectedBill(null);
+      rzp1.on('payment.failed', async function (response: any){
+        try {
+            await updateDoc(doc(db, "bills", bill.id), { status: 'Failed', paymentError: response.error });
+             toast({
+                variant: "destructive",
+                title: "Payment Failed",
+                description: response.error.description || "An error occurred during payment.",
+            });
+            fetchBills(user.uid);
+        } catch(dbError) {
+            console.error("Error updating bill status on failure:", dbError);
+        } finally {
+            setIsPaying(false);
+            setSelectedBill(null);
+        }
       });
       rzp1.open();
     };
@@ -162,13 +184,31 @@ export default function BillingPage() {
       setSelectedBill(null);
     };
     document.body.appendChild(script);
+    // Cleanup script tag on component unmount or if error
+    return () => { document.body.removeChild(script); };
   };
+
+  if (authLoading) {
+     return <div className="flex items-center justify-center h-full"><LoaderIcon className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
+  }
+  if (!user && !authLoading) {
+    return <div className="text-center p-8">Please log in to view your bills.</div>;
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader title="Billing & Payments" description="View your bills and make payments." />
 
-      {bills.length === 0 && (
+      {isLoadingBills && (
+         <Card className="text-center py-12">
+            <CardContent>
+                <LoaderIcon className="mx-auto h-12 w-12 animate-spin text-primary mb-4" />
+                <p className="text-muted-foreground">Loading your bills...</p>
+            </CardContent>
+        </Card>
+      )}
+
+      {!isLoadingBills && bills.length === 0 && (
         <Card className="text-center py-12">
             <CardContent>
                 <CreditCard className="mx-auto h-16 w-16 text-muted-foreground mb-4" />
@@ -178,17 +218,17 @@ export default function BillingPage() {
         </Card>
       )}
 
-      {bills.map((bill) => (
+      {!isLoadingBills && bills.map((bill) => (
         <Card key={bill.id} className="shadow-lg">
           <CardHeader>
             <div className="flex flex-col sm:flex-row justify-between sm:items-center">
               <div>
-                <CardTitle>Bill #{bill.id}</CardTitle>
+                <CardTitle>Bill #{bill.id.substring(0,8)}...</CardTitle>
                 <CardDescription>
                   For appointment with {bill.doctorName} on {new Date(bill.date).toLocaleDateString()}
                 </CardDescription>
               </div>
-              <span className={`mt-2 sm:mt-0 px-3 py-1 text-sm font-semibold rounded-full
+              <span className={`mt-2 sm:mt-0 px-3 py-1 text-sm font-semibold rounded-full capitalize
                 ${bill.status === 'Paid' ? 'bg-green-100 text-green-700' : 
                   bill.status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
                   'bg-red-100 text-red-700'}`}>
@@ -207,8 +247,8 @@ export default function BillingPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {bill.items.map((item) => (
-                  <TableRow key={item.id}>
+                {bill.items.map((item, index) => ( // Added index for key
+                  <TableRow key={`${bill.id}-item-${index}`}>
                     <TableCell>{item.description}</TableCell>
                     <TableCell className="text-right">{item.quantity}</TableCell>
                     <TableCell className="text-right">${item.unitPrice.toFixed(2)}</TableCell>
@@ -216,24 +256,24 @@ export default function BillingPage() {
                   </TableRow>
                 ))}
               </TableBody>
-              <TableFooter>
+              <ShadTableFooter>
                 <TableRow>
                   <TableCell colSpan={3} className="text-right font-semibold">Subtotal</TableCell>
                   <TableCell className="text-right">${bill.subtotal.toFixed(2)}</TableCell>
                 </TableRow>
                 <TableRow>
-                  <TableCell colSpan={3} className="text-right font-semibold">Tax (10%)</TableCell>
+                  <TableCell colSpan={3} className="text-right font-semibold">Tax ({(bill.tax/bill.subtotal*100).toFixed(0) || 10}%)</TableCell>
                   <TableCell className="text-right">${bill.tax.toFixed(2)}</TableCell>
                 </TableRow>
                 <TableRow className="text-lg font-bold">
                   <TableCell colSpan={3} className="text-right text-primary">Total Amount</TableCell>
                   <TableCell className="text-right text-primary">${bill.totalAmount.toFixed(2)}</TableCell>
                 </TableRow>
-              </TableFooter>
+              </ShadTableFooter>
             </Table>
           </CardContent>
           <CardFooter className="flex justify-end space-x-2">
-            <Button variant="outline">
+            <Button variant="outline" onClick={() => toast({title: "Coming Soon", description:"PDF download will be available shortly."})}>
               <Download className="mr-2 h-4 w-4" /> Download PDF
             </Button>
             {bill.status === 'Pending' && (
@@ -243,7 +283,7 @@ export default function BillingPage() {
                 className="bg-accent hover:bg-accent/90 text-accent-foreground"
               >
                 {isPaying && selectedBill?.id === bill.id ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoaderIcon className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
                   <CreditCard className="mr-2 h-4 w-4" />
                 )}
@@ -269,6 +309,7 @@ export default function BillingPage() {
                     All payments are processed securely through Razorpay. We support various payment methods including credit/debit cards, UPI, net banking, and wallets. 
                     Your financial information is encrypted and protected.
                 </p>
+                <p className="text-xs text-muted-foreground mt-1">Note: Ensure your Razorpay Key ID is correctly set up in the environment variables for payments to function.</p>
             </div>
         </CardContent>
       </Card>

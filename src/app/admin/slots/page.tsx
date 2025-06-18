@@ -1,19 +1,20 @@
+
 "use client";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { PlusCircle, Edit, Trash2, CalendarClock, Users } from "lucide-react";
-import { useState, useEffect } from "react";
+import { PlusCircle, Edit, Trash2, CalendarClock, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
-import { Checkbox } from "@/components/ui/checkbox";
+import { db, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, serverTimestamp, query as firestoreQuery, orderBy } from "@/lib/firebase";
 
 const daysOfWeek = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -23,8 +24,8 @@ const slotFormSchema = z.object({
   dayOfWeek: z.string().min(1, "Day of week is required."),
   startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid start time (HH:MM)."),
   endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/, "Invalid end time (HH:MM)."),
-  slotDurationMinutes: z.number().min(5, "Duration must be at least 5 minutes.").max(120),
-  capacityPerSlot: z.number().min(1, "Capacity must be at least 1.").max(50), // Max patients per individual generated slot
+  slotDurationMinutes: z.coerce.number().min(5, "Duration must be at least 5 minutes.").max(120),
+  capacityPerSlot: z.coerce.number().min(1, "Capacity must be at least 1.").max(15, "Capacity cannot exceed 15."), // Max 15 per PRD
 }).refine(data => data.startTime < data.endTime, {
   message: "End time must be after start time.",
   path: ["endTime"],
@@ -32,35 +33,79 @@ const slotFormSchema = z.object({
 
 type SlotFormValues = z.infer<typeof slotFormSchema>;
 
-interface SlotConfig extends SlotFormValues {
+interface DoctorOption {
   id: string;
-  doctorName?: string; // For display
+  name: string;
 }
 
-// Mock doctors for selection
-const mockDoctors = [
-  { id: "doc1", name: "Dr. Alice Smith" },
-  { id: "doc2", name: "Dr. Bob Johnson" },
-];
+interface SlotConfig extends SlotFormValues {
+  id: string;
+  doctorName?: string; 
+  createdAt?: any;
+}
 
 export default function ManageSlotsPage() {
   const { toast } = useToast();
   const [slotConfigs, setSlotConfigs] = useState<SlotConfig[]>([]);
+  const [doctors, setDoctors] = useState<DoctorOption[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSlotConfig, setEditingSlotConfig] = useState<SlotConfig | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<SlotFormValues>({
     resolver: zodResolver(slotFormSchema),
-    defaultValues: { doctorId: "", dayOfWeek: "", startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 15 },
+    defaultValues: { doctorId: "", dayOfWeek: "", startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 1 },
   });
 
-   useEffect(() => {
-    setSlotConfigs([
-      { id: "slotcfg1", doctorId: "doc1", doctorName: "Dr. Alice Smith", dayOfWeek: "Monday", startTime: "09:00", endTime: "12:00", slotDurationMinutes: 30, capacityPerSlot: 10 },
-      { id: "slotcfg2", doctorId: "doc1", doctorName: "Dr. Alice Smith", dayOfWeek: "Wednesday", startTime: "14:00", endTime: "17:00", slotDurationMinutes: 20, capacityPerSlot: 15 },
-      { id: "slotcfg3", doctorId: "doc2", doctorName: "Dr. Bob Johnson", dayOfWeek: "Tuesday", startTime: "10:00", endTime: "13:00", slotDurationMinutes: 15, capacityPerSlot: 5 },
-    ]);
-  }, []);
+  const fetchDoctors = useCallback(async () => {
+    try {
+      const doctorsSnapshot = await getDocs(firestoreQuery(collection(db, "doctors"), where("specialization", "==", "Gynecology"), orderBy("name")));
+      const fetchedDoctors: DoctorOption[] = [];
+      doctorsSnapshot.forEach(doc => fetchedDoctors.push({ id: doc.id, name: doc.data().name }));
+      setDoctors(fetchedDoctors);
+    } catch (error) {
+      console.error("Error fetching doctors for slots: ", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not fetch doctors." });
+    }
+  }, [toast]);
+
+  const fetchSlotConfigs = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const slotsSnapshot = await getDocs(firestoreQuery(collection(db, "slotConfigurations"), orderBy("doctorId"), orderBy("dayOfWeek")));
+      const fetchedConfigs: SlotConfig[] = [];
+      const doctorNameMap = new Map(doctors.map(d => [d.id, d.name]));
+      slotsSnapshot.forEach(doc => {
+        const data = doc.data();
+        fetchedConfigs.push({ 
+            id: doc.id, 
+            ...data, 
+            doctorName: doctorNameMap.get(data.doctorId) || data.doctorId 
+        } as SlotConfig);
+      });
+      setSlotConfigs(fetchedConfigs);
+    } catch (error) {
+      console.error("Error fetching slot configurations: ", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not fetch slot configurations." });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [toast, doctors]);
+
+  useEffect(() => {
+    fetchDoctors();
+  }, [fetchDoctors]);
+
+  useEffect(() => {
+    if (doctors.length > 0) { // Fetch slots only after doctors are loaded
+        fetchSlotConfigs();
+    } else if (!isLoading && doctors.length === 0) { // If loading done and no doctors
+        setIsLoading(false); // Ensure loading is false if no doctors to fetch slots for
+        setSlotConfigs([]);
+    }
+  }, [doctors, fetchSlotConfigs, isLoading]);
+
 
   const handleDialogOpen = (slotConfig?: SlotConfig) => {
     if (slotConfig) {
@@ -68,48 +113,81 @@ export default function ManageSlotsPage() {
       form.reset(slotConfig);
     } else {
       setEditingSlotConfig(null);
-      form.reset({ doctorId: "", dayOfWeek: "", startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 15 });
+      form.reset({ doctorId: "", dayOfWeek: "", startTime: "09:00", endTime: "17:00", slotDurationMinutes: 30, capacityPerSlot: 1 });
     }
     setIsDialogOpen(true);
   };
 
   const onSubmit = async (values: SlotFormValues) => {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const doctor = mockDoctors.find(d => d.id === values.doctorId);
-    if (editingSlotConfig) {
-      setSlotConfigs(slotConfigs.map(sc => sc.id === editingSlotConfig.id ? { ...editingSlotConfig, ...values, doctorName: doctor?.name } : sc));
-      toast({ title: "Slot Configuration Updated" });
-    } else {
-      const newSlotConfig: SlotConfig = { ...values, id: `slotcfg${Date.now()}`, doctorName: doctor?.name };
-      setSlotConfigs([...slotConfigs, newSlotConfig]);
-      toast({ title: "Slot Configuration Added" });
+    setIsSubmitting(true);
+    try {
+      if (editingSlotConfig) {
+        const slotRef = doc(db, "slotConfigurations", editingSlotConfig.id);
+        await updateDoc(slotRef, values);
+        toast({ title: "Slot Configuration Updated" });
+      } else {
+        await addDoc(collection(db, "slotConfigurations"), { ...values, createdAt: serverTimestamp() });
+        toast({ title: "Slot Configuration Added" });
+      }
+      fetchSlotConfigs();
+      setIsDialogOpen(false);
+      form.reset();
+    } catch (error: any) {
+        console.error("Error saving slot config:", error);
+        toast({variant: "destructive", title: "Save Error", description: error.message || "Could not save slot configuration."})
+    } finally {
+        setIsSubmitting(false);
     }
-    setIsDialogOpen(false);
-    form.reset();
   };
 
   const handleDeleteSlotConfig = async (slotConfigId: string) => {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setSlotConfigs(slotConfigs.filter(sc => sc.id !== slotConfigId));
-    toast({ title: "Slot Configuration Deleted", variant: "destructive" });
+    if (!window.confirm("Are you sure you want to delete this slot configuration?")) return;
+    try {
+        await deleteDoc(doc(db, "slotConfigurations", slotConfigId));
+        toast({ title: "Slot Configuration Deleted", variant: "destructive" });
+        fetchSlotConfigs();
+    } catch (error: any) {
+        console.error("Error deleting slot config:", error);
+        toast({variant: "destructive", title: "Delete Error", description: error.message || "Could not delete slot configuration."})
+    }
   };
 
+  if (isLoading && doctors.length === 0) { // Initial loading for doctors
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="ml-2">Loading data...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Manage Doctor Slots" description="Define doctors' availability schedules and slot capacities.">
-        <Button onClick={() => handleDialogOpen()}>
+      <PageHeader title="Manage Doctor Slots" description="Define Gynecologists' availability schedules and slot capacities.">
+        <Button onClick={() => handleDialogOpen()} disabled={doctors.length === 0}>
           <PlusCircle className="mr-2 h-4 w-4" /> Add Slot Configuration
         </Button>
       </PageHeader>
+      {doctors.length === 0 && !isLoading && (
+        <Card>
+            <CardContent className="pt-6 text-center text-muted-foreground">
+                <p>Please add doctors (Gynecologists) in the "Manage Doctors" section before configuring slots.</p>
+            </CardContent>
+        </Card>
+      )}
 
        <Card className="shadow-lg">
         <CardHeader>
           <CardTitle>Slot Configurations</CardTitle>
-          <CardDescription>List of defined availability schedules for doctors.</CardDescription>
+          <CardDescription>List of defined availability schedules for Gynecologists.</CardDescription>
         </CardHeader>
         <CardContent>
-          {slotConfigs.length === 0 ? (
+          {isLoading && slotConfigs.length === 0 ? (
+             <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="ml-2">Loading configurations...</p>
+            </div>
+          ) : slotConfigs.length === 0 ? (
              <div className="text-center py-8 text-muted-foreground">
                 <CalendarClock className="mx-auto h-12 w-12 mb-4"/>
                 <p>No slot configurations found. Add one to define doctor availability.</p>
@@ -155,7 +233,7 @@ export default function ManageSlotsPage() {
           <DialogHeader>
             <DialogTitle>{editingSlotConfig ? "Edit Slot Configuration" : "Add New Slot Configuration"}</DialogTitle>
             <DialogDescription>
-              Define a recurring availability block for a doctor. Individual slots will be generated based on this. Max 15 patients per generated slot.
+              Define a recurring availability block for a Gynecologist. Max 15 patients per generated slot.
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -167,9 +245,9 @@ export default function ManageSlotsPage() {
                   <FormItem>
                     <FormLabel>Doctor</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl><SelectTrigger><SelectValue placeholder="Select a doctor" /></SelectTrigger></FormControl>
+                      <FormControl><SelectTrigger><SelectValue placeholder="Select a Gynecologist" /></SelectTrigger></FormControl>
                       <SelectContent>
-                        {mockDoctors.map(doc => <SelectItem key={doc.id} value={doc.id}>{doc.name}</SelectItem>)}
+                        {doctors.map(doc => <SelectItem key={doc.id} value={doc.id}>{doc.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -232,17 +310,17 @@ export default function ManageSlotsPage() {
                 name="capacityPerSlot"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Max Patients Per Slot (e.g., 30 min slot)</FormLabel>
+                    <FormLabel>Max Patients Per Individual Slot</FormLabel>
                     <FormControl><Input type="number" {...field} onChange={e => field.onChange(parseInt(e.target.value,10))} /></FormControl>
-                    <FormDescription>This is the capacity for each generated slot (e.g. 9:00-9:30). The system caps this at 15.</FormDescription>
+                    <FormDescription>Capacity for each generated slot (e.g. 9:00-9:30). System cap: 15.</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
-                <Button type="submit" className="bg-accent hover:bg-accent/90 text-accent-foreground">
-                    {form.formState.isSubmitting ? "Saving..." : (editingSlotConfig ? "Save Changes" : "Add Configuration")}
+                <Button type="submit" className="bg-accent hover:bg-accent/90 text-accent-foreground" disabled={isSubmitting}>
+                    {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin"/>Saving...</> : (editingSlotConfig ? "Save Changes" : "Add Configuration")}
                 </Button>
               </DialogFooter>
             </form>
