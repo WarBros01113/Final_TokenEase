@@ -12,55 +12,59 @@ service cloud.firestore {
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
+    // Helper function to check if the authenticated user matches the given userId
+    function isUser(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    // Helper function to check if the query's filters contain a specific field and operator
+    function queryHasFilter(fieldName, operator) {
+      return request.query.filters.exists(f, f[0] == fieldName && f[1] == operator);
+    }
+
+    // Helper function to check if the query filters by a specific field and value
+    function queryHasFilterWithValue(fieldName, operator, value) {
+      return request.query.filters.exists(f, f[0] == fieldName && f[1] == operator && f[2] == value);
+    }
+
     // Users collection:
     match /users/{userId} {
-      allow read, update: if request.auth != null && (request.auth.uid == userId || isAdmin());
-      allow create: if request.auth != null && request.auth.uid == userId;
+      allow read, update: if isUser(userId) || isAdmin();
+      allow create: if isUser(userId); // User creates their own doc during sign up
       allow list: if isAdmin();
-      allow delete: if isAdmin();
+      allow delete: if isAdmin(); // Or a more complex rule for self-deletion if implemented
     }
 
     // User Settings collection:
+    // Document ID is expected to be "userPrefs_" + userId.
     match /userSettings/{settingsDocId} {
-      allow read, update: if request.auth != null && (settingsDocId == ("userPrefs_" + request.auth.uid) || isAdmin());
-      allow create: if request.auth != null && (settingsDocId == ("userPrefs_" + request.auth.uid) || isAdmin());
+      // Ensure the userId in the docId matches the authenticated user
+      allow read, update: if (request.auth != null && settingsDocId == "userPrefs_" + request.auth.uid) || isAdmin();
+      allow create: if (request.auth != null && settingsDocId == "userPrefs_" + request.auth.uid) || isAdmin();
       allow delete: if isAdmin();
     }
 
     // Appointments collection:
     match /appointments/{appointmentId} {
-      allow create: if request.auth != null &&
-                     ( (request.resource.data.patientId == request.auth.uid) || isAdmin() );
-      allow read, update: if request.auth != null &&
-                           ( (resource.data.patientId == request.auth.uid) || isAdmin() );
+      allow create: if (request.auth != null && request.resource.data.patientId == request.auth.uid) || isAdmin();
+      allow read, update: if (request.auth != null && resource.data.patientId == request.auth.uid) || isAdmin();
+      // Allow patient to cancel (update status) their own upcoming/active appointments, or admin to do anything.
+      // Deleting documents might be admin-only or a backend process for archival.
+      // For this example, direct delete for patients on upcoming/active status.
+      allow delete: if (request.auth != null && resource.data.patientId == request.auth.uid && (resource.data.status == 'upcoming' || resource.data.status == 'active')) || isAdmin();
 
       allow list: if request.auth != null && (
-        ( // Patient listing their OWN appointments
-          // Expecting one filter: patientId == request.auth.uid
-          // And an optional limit up to 100
-          request.query.filters.size() == 1 &&
-          request.query.filters[0][0] == 'patientId' &&
-          request.query.filters[0][2] == request.auth.uid &&
-          (request.query.limit == null || request.query.limit <= 100)
+        isAdmin() ||
+        ( // Scenario 1: Patient listing their OWN appointments
+          queryHasFilterWithValue('patientId', '==', request.auth.uid) &&
+          (request.query.limit == 0 || request.query.limit <= 100) // No limit from client means request.query.limit is 0
         ) ||
-        ( // ANY authenticated user checking slot availability for a specific doctor and date
-          // Expecting two filters: doctorId and date
-          // And a limit up to 300
-          request.query.filters.size() == 2 &&
-          ( // Check if the two filters are 'doctorId' and 'date' (order doesn't matter)
-            (request.query.filters[0][0] == 'doctorId' && request.query.filters[1][0] == 'date') ||
-            (request.query.filters[0][0] == 'date' && request.query.filters[1][0] == 'doctorId')
-          ) &&
-          request.query.limit <= 300
-        ) ||
-        isAdmin() // Admins can list all
+        ( // Scenario 2: ANY authenticated user checking slot availability for a specific doctor and date
+          queryHasFilter('doctorId', '==') &&
+          queryHasFilter('date', '==') &&
+          request.query.limit > 0 && request.query.limit <= 300 // Client MUST provide a limit for this query type
+        )
       );
-
-      allow delete: if request.auth != null &&
-                     (
-                       (resource.data.patientId == request.auth.uid && (resource.data.status == 'upcoming' || resource.data.status == 'active')) ||
-                       isAdmin()
-                     );
     }
 
     // Doctors collection:
@@ -72,7 +76,6 @@ service cloud.firestore {
     // Slot Configurations collection:
     match /slotConfigurations/{configId} {
       // Any authenticated user can list/read slot configurations for booking purposes.
-      // The queries made by clients (e.g., filtering by doctorId and dayOfWeek array-contains) are allowed.
       allow read, list: if request.auth != null;
       allow create, update, delete: if isAdmin(); // Admins manage slot configurations.
     }
@@ -85,23 +88,15 @@ service cloud.firestore {
 
     // Bills collection:
     match /bills/{billId} {
-      // Patients can read/update their own bills. Admins can read/update any bill.
-      allow read, update: if request.auth != null &&
-                           ( (resource.data.patientId == request.auth.uid) || isAdmin() );
-      // Patients can list their own bills. Admins can list all bills.
+      allow read, update: if (request.auth != null && resource.data.patientId == request.auth.uid) || isAdmin();
+      allow create, delete: if isAdmin(); // Creating/deleting bills is admin-only or system-driven.
       allow list: if request.auth != null && (
-        ( // Patient listing their own bills
-          // Expecting one filter: patientId == request.auth.uid
-          // And an optional limit up to 100
-          request.query.filters.size() == 1 &&
-          request.query.filters[0][0] == 'patientId' &&
-          request.query.filters[0][2] == request.auth.uid &&
-          (request.query.limit == null || request.query.limit <= 100)
-        ) ||
-        isAdmin()
+        isAdmin() ||
+        ( // Patient listing their OWN bills
+          queryHasFilterWithValue('patientId', '==', request.auth.uid) &&
+          (request.query.limit == 0 || request.query.limit <= 100)
+        )
       );
-      // Creating/deleting bills is admin-only or system-driven.
-      allow create, delete: if isAdmin();
     }
 
     // Clinic Configuration collection (e.g., global settings):
@@ -114,8 +109,7 @@ service cloud.firestore {
     // Doctor Queue Status collection:
     match /doctorQueueStatus/{doctorId} {
       allow read: if request.auth != null; // Any authenticated user can read live queue status.
-      // Writing to queue status should be restricted (e.g., admins or specific doctor role).
-      allow write: if isAdmin();
+      allow write: if isAdmin(); // Or a more specific doctor role if you implement that
     }
 
     // --- Default Deny Rule ---
