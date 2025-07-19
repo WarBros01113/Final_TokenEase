@@ -202,11 +202,13 @@ export default function AppointmentsPage() {
           setAvailableSlots(generatedSlots.sort((a,b) => a.startTime.localeCompare(b.startTime)));
         } catch (error: any) {
           console.error("Error generating/fetching slots:", error);
-          if (error.code) {
-            console.error("Firebase error code:", error.code);
-            console.error("Firebase error message:", error.message);
+          if (error.code === 'failed-precondition') {
+            console.error("Firebase error code:", error.code, " - This usually means a composite index is required.");
+            console.warn("Please create a composite index in Firestore for the 'slotConfigurations' collection with fields: 'doctorId' (Ascending) and 'dayOfWeek' (Array).");
+            toast({ variant: "destructive", title: "Configuration Error", description: "A required database index is missing. Please contact support or check the console.", duration: 10000 });
+          } else {
+             toast({ variant: "destructive", title: "Slot Loading Error", description: `Could not load available slots. ${error.message || 'Please try again.'}` });
           }
-          toast({ variant: "destructive", title: "Slot Loading Error", description: `Could not load available slots. ${error.message || 'Please try again.'}` });
         } finally {
           setIsLoadingSlots(false);
         }
