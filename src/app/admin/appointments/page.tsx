@@ -8,13 +8,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { CalendarClock, Search, Loader2, AlertCircle, Eye } from "lucide-react";
+import { CalendarClock, Search, Loader2, AlertCircle, Eye, MoreHorizontal, CheckCircle, XCircle, Hourglass, PlayCircle } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { db, collection, getDocs, query as firestoreQuery, orderBy, Timestamp, where, writeBatch } from "@/lib/firebase";
+import { db, collection, getDocs, query as firestoreQuery, orderBy, Timestamp, where, writeBatch, doc, updateDoc } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -22,6 +21,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
 
 interface Appointment {
   id: string;
@@ -58,6 +66,7 @@ export default function ManageAppointmentsPage() {
   const { toast } = useToast();
   const [allAppointments, setAllAppointments] = useState<Appointment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<"upcoming" | "past">("upcoming");
 
@@ -182,6 +191,29 @@ export default function ManageAppointmentsPage() {
     setViewingAppointment(appointment);
     setIsViewDialogOpen(true);
   };
+  
+  const handleStatusChange = async (appointmentId: string, status: AppointmentStatus) => {
+    setIsUpdatingStatus(true);
+    try {
+      const appointmentRef = doc(db, "appointments", appointmentId);
+      await updateDoc(appointmentRef, { status: status });
+      toast({
+        title: "Status Updated",
+        description: `Appointment status changed to ${status}.`,
+      });
+      fetchAppointments(); // Re-fetch all appointments to reflect the change
+    } catch (error) {
+      console.error("Error updating appointment status:", error);
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: "Could not update the appointment status.",
+      });
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
+
 
   if (isLoading) {
     return (
@@ -218,10 +250,10 @@ export default function ManageAppointmentsPage() {
               <TabsTrigger value="past">Past (Completed/Cancelled)</TabsTrigger>
             </TabsList>
             <TabsContent value="upcoming">
-              <AppointmentsTable appointments={filteredAppointments} isLoading={isLoading} onViewDetails={handleViewAppointment} />
+              <AppointmentsTable appointments={filteredAppointments} isLoading={isLoading || isUpdatingStatus} onViewDetails={handleViewAppointment} onStatusChange={handleStatusChange} />
             </TabsContent>
             <TabsContent value="past">
-              <AppointmentsTable appointments={filteredAppointments} isLoading={isLoading} onViewDetails={handleViewAppointment} />
+              <AppointmentsTable appointments={filteredAppointments} isLoading={isLoading || isUpdatingStatus} onViewDetails={handleViewAppointment} onStatusChange={handleStatusChange} />
             </TabsContent>
           </Tabs>
         </CardContent>
@@ -262,9 +294,10 @@ interface AppointmentsTableProps {
     appointments: Appointment[];
     isLoading: boolean;
     onViewDetails: (appointment: Appointment) => void;
+    onStatusChange: (appointmentId: string, status: AppointmentStatus) => void;
 }
 
-const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isLoading, onViewDetails }) => {
+const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isLoading, onViewDetails, onStatusChange }) => {
     if (isLoading) {
       return (
         <div className="flex items-center justify-center py-8">
@@ -312,9 +345,34 @@ const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isL
                         </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                        <Button variant="outline" size="sm" onClick={() => onViewDetails(appt)}>
-                            <Eye className="mr-1 h-4 w-4" /> View
-                        </Button>
+                       <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" className="h-8 w-8 p-0">
+                              <span className="sr-only">Open menu</span>
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                            <DropdownMenuItem onClick={() => onViewDetails(appt)}>
+                              <Eye className="mr-2 h-4 w-4" />
+                              View Details
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => onStatusChange(appt.id, 'completed')} disabled={appt.status === 'completed'}>
+                               <CheckCircle className="mr-2 h-4 w-4 text-green-500" /> Mark as Completed
+                            </DropdownMenuItem>
+                             <DropdownMenuItem onClick={() => onStatusChange(appt.id, 'active')} disabled={appt.status === 'active'}>
+                               <PlayCircle className="mr-2 h-4 w-4 text-blue-500" /> Mark as Active
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => onStatusChange(appt.id, 'delayed')} disabled={appt.status === 'delayed'}>
+                                <Hourglass className="mr-2 h-4 w-4 text-yellow-500" /> Mark as Delayed
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => onStatusChange(appt.id, 'cancelled')} disabled={appt.status === 'cancelled' || appt.status === 'completed'}>
+                                <XCircle className="mr-2 h-4 w-4 text-red-500" /> Mark as Cancelled
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                     </TableCell>
                     </TableRow>
                 ))}
@@ -323,3 +381,5 @@ const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isL
         </div>
     );
 }
+
+    
