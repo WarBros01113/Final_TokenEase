@@ -47,7 +47,7 @@ interface BookedAppointment {
   doctorName: string;
   date: string; // ISO String
   time: string; // Display time
-  status: 'upcoming' | 'active' | 'completed' | 'cancelled' | 'delayed';
+  status: 'upcoming' | 'active' | 'completed' | 'cancelled' | 'delayed' | 'missed';
   type: string;
   patientId: string;
   tokenNumber?: number;
@@ -185,6 +185,7 @@ export default function AppointmentsPage() {
                 appointmentsRef,
                 where("doctorId", "==", selectedDoctorId),
                 where("date", "==", dateString),
+                where("status", "!=", "cancelled"), // Exclude cancelled appointments from count
                 limit(300) 
             );
             const bookingsSnapshot = await getDocs(qBookings);
@@ -229,6 +230,25 @@ export default function AppointmentsPage() {
     setIsSubmitting(true);
     const selectedSlot = availableSlots.find(slot => slot.id === data.timeSlotId);
     const doctor = doctors.find(doc => doc.id === data.doctorId);
+    const dateString = selectedDate.toISOString().split('T')[0];
+
+    // Check for existing appointment on the same day
+    const existingApptQuery = firestoreQuery(
+      collection(db, "appointments"),
+      where("patientId", "==", user.uid),
+      where("date", "==", dateString),
+      where("status", "in", ["upcoming", "active", "delayed", "missed"])
+    );
+    const existingApptSnapshot = await getDocs(existingApptQuery);
+    if (!existingApptSnapshot.empty) {
+      toast({
+        variant: "destructive",
+        title: "Booking Limit Reached",
+        description: "You can only book one appointment per day.",
+      });
+      setIsSubmitting(false);
+      return;
+    }
 
     if (!selectedSlot || !doctor || !selectedDate) {
       toast({ variant: "destructive", title: "Booking Error", description: "Invalid selection. Please try again." });
@@ -249,7 +269,8 @@ export default function AppointmentsPage() {
         where("doctorId", "==", doctor.id),
         where("date", "==", selectedDate.toISOString().split('T')[0]),
         where("appointmentTime", "==", selectedSlot.startTime),
-        where("slotConfigId", "==", selectedSlot.slotConfigId)
+        where("slotConfigId", "==", selectedSlot.slotConfigId),
+        where("status", "!=", "cancelled") // Ensure cancelled are not counted for token
       );
       const tokenQuerySnapshot = await getDocs(tokenQuery);
       const tokenNumber = tokenQuerySnapshot.size + 1;
@@ -430,7 +451,7 @@ export default function AppointmentsPage() {
               ) : bookedAppointments.length > 0 ? (
                 <div className="space-y-4">
                   {bookedAppointments.map(appt => (
-                    <Card key={appt.id} className={`p-4 ${appt.status === 'completed' || appt.status === 'cancelled' ? 'bg-muted/50' : 'bg-secondary/30'}`}>
+                    <Card key={appt.id} className={`p-4 ${appt.status === 'completed' || appt.status === 'cancelled' || appt.status === 'missed' ? 'bg-muted/50' : 'bg-secondary/30'}`}>
                       <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
                         <div>
                           <h3 className="font-semibold text-primary">{appt.doctorName}</h3>
@@ -447,6 +468,7 @@ export default function AppointmentsPage() {
                               appt.status === 'completed' ? 'bg-gray-100 text-gray-700' :
                               appt.status === 'cancelled' ? 'bg-red-100 text-red-700' :
                               appt.status === 'delayed' ? 'bg-yellow-100 text-yellow-700' :
+                              appt.status === 'missed' ? 'bg-orange-100 text-orange-700' :
                               'bg-gray-100 text-gray-700'}`}>
                             {appt.status}
                           </span>

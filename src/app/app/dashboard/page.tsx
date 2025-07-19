@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { useEffect, useState, useCallback } from "react";
 import Image from "next/image";
-import { db, collection, query, where, getDocs, orderBy, Timestamp, doc, onSnapshot } from "@/lib/firebase";
+import { db, collection, query, where, getDocs, orderBy, Timestamp, doc, onSnapshot, writeBatch, updateDoc } from "@/lib/firebase";
 import type { Unsubscribe } from "firebase/firestore";
 
 
@@ -21,7 +21,7 @@ interface Appointment {
   date: string; 
   time: string; // appointmentTime
   appointmentTimeDisplay: string; // display string for time
-  status: 'upcoming' | 'active' | 'completed' | 'cancelled' | 'delayed'; // Added 'delayed'
+  status: 'upcoming' | 'active' | 'completed' | 'cancelled' | 'delayed' | 'missed';
   tokenNumber?: number;
   patientId: string;
   createdAt: Timestamp;
@@ -49,9 +49,48 @@ export default function PatientDashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const updateMissedAppointments = useCallback(async (userId: string) => {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Start of today
+      const todayStr = today.toISOString().split('T')[0];
+
+      const missedApptsQuery = query(
+        collection(db, "appointments"),
+        where("patientId", "==", userId),
+        where("date", "<", todayStr),
+        where("status", "in", ["upcoming", "active", "delayed"])
+      );
+
+      const snapshot = await getDocs(missedApptsQuery);
+      if (!snapshot.empty) {
+        const batch = writeBatch(db);
+        snapshot.forEach(docSnap => {
+          batch.update(docSnap.ref, { status: "missed" });
+          // Note: A Cloud Function would be better for incrementing strikes to avoid race conditions.
+          // For now, this is a client-side approximation.
+        });
+        await batch.commit();
+        console.log(`Updated ${snapshot.size} appointments to 'missed' status.`);
+        return true; // Indicates an update happened
+      }
+      return false;
+    } catch (e) {
+      console.error("Error updating missed appointments: ", e);
+      return false;
+    }
+  }, []);
+
   const fetchData = useCallback(async (currentUserId: string) => {
     setIsLoading(true);
     setError(null);
+    
+    // First, update missed appointments
+    const updated = await updateMissedAppointments(currentUserId);
+    if (updated) {
+        // A brief pause to allow UI to potentially catch up if needed, or just re-query
+    }
+
     setUpcomingAppointments([]);
     setActiveAppointmentForToken(null); 
     try {
@@ -61,8 +100,8 @@ export default function PatientDashboardPage() {
       const qUpcoming = query(
         appointmentsRef,
         where("patientId", "==", currentUserId),
-        where("status", "in", ["upcoming", "active", "delayed"]), // Include 'delayed'
-        where("date", ">=", today), // Appointments from today onwards
+        where("status", "in", ["upcoming", "active", "delayed"]),
+        where("date", ">=", today),
         orderBy("date", "asc"),
         orderBy("time", "asc")
       );
@@ -87,9 +126,7 @@ export default function PatientDashboardPage() {
         };
         fetchedUpcomingAppointments.push(appointment);
 
-        // Logic to find the most relevant appointment for token display (today's active, or earliest upcoming with token)
         if (appointment.date === today && appointment.tokenNumber && (appointment.status === 'active' || appointment.status === 'upcoming' || appointment.status === 'delayed')) {
-            // Prioritize 'active' or 'delayed' appointments
             if (appointment.status === 'active' || appointment.status === 'delayed') {
                 if (!candidateForActiveToken || 
                     (candidateForActiveToken.status !== 'active' && candidateForActiveToken.status !== 'delayed') || 
@@ -97,7 +134,6 @@ export default function PatientDashboardPage() {
                     candidateForActiveToken = appointment;
                 }
             } else if (appointment.status === 'upcoming') {
-                // If current candidate is not 'active' or 'delayed', consider 'upcoming'
                 if (!candidateForActiveToken || (candidateForActiveToken.status !== 'active' && candidateForActiveToken.status !== 'delayed' && appointment.time < candidateForActiveToken.time)) {
                     candidateForActiveToken = appointment;
                 }
@@ -114,7 +150,7 @@ export default function PatientDashboardPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [updateMissedAppointments]);
 
   useEffect(() => {
     if (user?.uid && !authLoading) {
