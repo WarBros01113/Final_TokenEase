@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { CalendarClock, Search, Loader2, AlertCircle, Eye } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { db, collection, getDocs, query as firestoreQuery, orderBy, Timestamp } from "@/lib/firebase";
+import { db, collection, getDocs, query as firestoreQuery, orderBy, Timestamp, where, writeBatch } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -32,7 +32,7 @@ interface Appointment {
   date: string; 
   time: string; 
   appointmentTimeDisplay: string; 
-  status: 'upcoming' | 'active' | 'delayed' | 'completed' | 'cancelled';
+  status: 'upcoming' | 'active' | 'delayed' | 'completed' | 'cancelled' | 'missed';
   tokenNumber?: number;
   createdAt: Timestamp; 
   notes?: string; 
@@ -48,6 +48,7 @@ const getStatusBadgeStyle = (status: AppointmentStatus): string => {
         case 'delayed': return 'bg-yellow-100 text-yellow-700 border-yellow-300';
         case 'completed': return 'bg-gray-100 text-gray-700 border-gray-300';
         case 'cancelled': return 'bg-red-100 text-red-700 border-red-300';
+        case 'missed': return 'bg-orange-100 text-orange-700 border-orange-300';
         default: return 'bg-gray-100 text-gray-700 border-gray-300';
     }
 }
@@ -63,8 +64,40 @@ export default function ManageAppointmentsPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [viewingAppointment, setViewingAppointment] = useState<Appointment | null>(null);
 
+  const updateMissedAppointments = useCallback(async () => {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = today.toISOString().split('T')[0];
+      
+      const missedApptsQuery = firestoreQuery(
+        collection(db, "appointments"),
+        where("date", "<", todayStr),
+        where("status", "in", ["upcoming", "active", "delayed"])
+      );
+
+      const snapshot = await getDocs(missedApptsQuery);
+      if (!snapshot.empty) {
+        const batch = writeBatch(db);
+        snapshot.forEach(docSnap => {
+          batch.update(docSnap.ref, { status: "missed" });
+        });
+        await batch.commit();
+        console.log(`Updated ${snapshot.size} appointments to 'missed'.`);
+        return true; 
+      }
+      return false;
+    } catch (e) {
+      console.error("Error updating missed appointments on admin page: ", e);
+      return false;
+    }
+  }, []);
+
   const fetchAppointments = useCallback(async () => {
     setIsLoading(true);
+    // First, run the cleanup for missed appointments
+    await updateMissedAppointments();
+    
     try {
       const appointmentsRef = collection(db, "appointments");
       const q = firestoreQuery(
@@ -99,7 +132,7 @@ export default function ManageAppointmentsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [toast]);
+  }, [toast, updateMissedAppointments]);
 
   useEffect(() => {
     fetchAppointments();
@@ -117,7 +150,7 @@ export default function ManageAppointmentsPage() {
         });
     } else if (activeTab === "past") {
       appointmentsToShow = appointmentsToShow
-        .filter(appt => ['completed', 'cancelled'].includes(appt.status))
+        .filter(appt => ['completed', 'cancelled', 'missed'].includes(appt.status))
         .sort((a,b) => { 
             const dateComp = b.date.localeCompare(a.date);
             if (dateComp !== 0) return dateComp;
@@ -286,4 +319,3 @@ const AppointmentsTable: React.FC<AppointmentsTableProps> = ({ appointments, isL
         </div>
     );
 }
-
