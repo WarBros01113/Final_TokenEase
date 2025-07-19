@@ -58,8 +58,8 @@ export default function PatientDashboardPage() {
       const missedApptsQuery = query(
         collection(db, "appointments"),
         where("patientId", "==", userId),
-        where("date", "<", todayStr),
-        where("status", "in", ["upcoming", "active", "delayed"])
+        where("status", "in", ["upcoming", "active", "delayed"]),
+        where("date", "<", todayStr)
       );
 
       const snapshot = await getDocs(missedApptsQuery);
