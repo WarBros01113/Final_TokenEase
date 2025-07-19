@@ -190,7 +190,7 @@ export default function AppointmentsPage() {
                 appointmentsRef,
                 where("doctorId", "==", selectedDoctorId),
                 where("date", "==", dateString),
-                where("status", "!=", "cancelled"), // Exclude cancelled appointments from count
+                where("status", "in", ['upcoming', 'active', 'delayed', 'missed', 'completed']), // Exclude cancelled appointments from count
                 limit(300) 
             );
             const bookingsSnapshot = await getDocs(qBookings);
@@ -206,8 +206,14 @@ export default function AppointmentsPage() {
           }
           setAvailableSlots(generatedSlots.sort((a,b) => a.startTime.localeCompare(b.startTime)));
         } catch (error: any) {
-          console.error("Error generating/fetching slots:", error);
-          toast({ variant: "destructive", title: "Slot Loading Error", description: `Could not load available slots. ${error.message || 'Please try again.'}` });
+           console.error("Error generating/fetching slots:", error);
+          if (error.code === 'failed-precondition') {
+            console.error("Firebase error code:", error.code, " - This usually means a composite index is required.");
+            console.warn("Please create a composite index in Firestore for the 'slotConfigurations' collection with fields: 'doctorId' (Ascending) and 'dayOfWeek' (Array).");
+            toast({ variant: "destructive", title: "Configuration Error", description: "A required database index is missing. Please contact support or check the console.", duration: 10000 });
+          } else {
+            toast({ variant: "destructive", title: "Slot Loading Error", description: `Could not load available slots. ${error.message || 'Please try again.'}` });
+          }
         } finally {
           setIsLoadingSlots(false);
         }
@@ -271,7 +277,7 @@ export default function AppointmentsPage() {
         where("date", "==", selectedDate.toISOString().split('T')[0]),
         where("appointmentTime", "==", selectedSlot.startTime),
         where("slotConfigId", "==", selectedSlot.slotConfigId),
-        where("status", "!=", "cancelled") // Ensure cancelled are not counted for token
+        where("status", "in", ['upcoming', 'active', 'delayed', 'missed', 'completed']) // Ensure cancelled are not counted for token
       );
       const tokenQuerySnapshot = await getDocs(tokenQuery);
       const tokenNumber = tokenQuerySnapshot.size + 1;
@@ -493,5 +499,3 @@ export default function AppointmentsPage() {
     </div>
   );
 }
-
-    
