@@ -25,7 +25,6 @@ interface AppointmentDetails {
   status: 'upcoming' | 'active' | 'delayed' | 'completed' | 'cancelled';
   currentServingToken?: number; 
   yourToken?: number;
-  estimatedWaitTime?: string; 
   clinicAddress: string; 
   notes?: string;
   patientId: string;
@@ -33,7 +32,6 @@ interface AppointmentDetails {
 
 interface LiveQueueStatus {
     currentServingToken: number;
-    estimatedWaitTime: string; 
     updatedAt: Timestamp;
 }
 
@@ -74,7 +72,7 @@ export default function AppointmentStatusPage() {
           appointmentTimeDisplay: data.appointmentTimeDisplay || data.appointmentTime,
           status: data.status,
           yourToken: data.tokenNumber, 
-          clinicAddress: "TokenEase Gynecology Clinic, 123 Health St, Wellness City", 
+          clinicAddress: "TokenEase Gynecology Clinic, Tirunelveli", 
           notes: data.notes,
           patientId: data.patientId,
           doctorAvatarUrl: data.doctorAvatarUrl,
@@ -107,9 +105,7 @@ export default function AppointmentStatusPage() {
             setLiveQueue(data);
             
             if (appointment.yourToken && data.currentServingToken >= appointment.yourToken && appointment.status !== 'completed' && appointment.status !== 'cancelled') {
-                 setAppointment(prev => prev ? {...prev, status: 'active', estimatedWaitTime: 'Your turn soon!'} : null);
-            } else if (appointment.status !== 'completed' && appointment.status !== 'cancelled') {
-                 setAppointment(prev => prev ? {...prev, estimatedWaitTime: data.estimatedWaitTime} : null);
+                 setAppointment(prev => prev ? {...prev, status: 'active'} : null);
             }
 
         } else {
@@ -165,9 +161,23 @@ export default function AppointmentStatusPage() {
     );
   }
   
-  const isYourTurn = appointment.status === 'active' && liveQueue?.currentServingToken && appointment.yourToken && liveQueue.currentServingToken >= appointment.yourToken;
+  const isYourTurn = !!(liveQueue?.currentServingToken && appointment.yourToken && liveQueue.currentServingToken >= appointment.yourToken);
+  const peopleAhead = (liveQueue?.currentServingToken && appointment.yourToken) ? appointment.yourToken - liveQueue.currentServingToken : null;
+
   const displayCurrentServingToken = liveQueue?.currentServingToken ?? (appointment.status === 'upcoming' ? '-' : appointment.yourToken ? appointment.yourToken -1 : '-'); 
-  const displayEstimatedWaitTime = isYourTurn ? "Your turn soon!" : liveQueue?.estimatedWaitTime ?? appointment.estimatedWaitTime ?? "Calculating...";
+  
+  const getQueueMessage = () => {
+    if (isYourTurn) {
+        return <p className="text-center text-xl font-bold text-green-600">It's your turn!</p>;
+    }
+    if (peopleAhead !== null && peopleAhead > 0) {
+        return <p className="text-center text-lg font-medium text-foreground/80 flex items-center justify-center"><Users className="mr-2 h-5 w-5 text-primary"/> {peopleAhead} {peopleAhead === 1 ? 'person is' : 'people are'} before you. Please wait.</p>;
+    }
+    if (appointment.yourToken && !liveQueue) {
+        return <p className="text-center text-lg font-medium text-foreground/80">The queue has not started yet.</p>
+    }
+    return <p className="text-center text-lg font-medium text-foreground/80">Please wait for the queue to begin.</p>;
+  };
 
   return (
     <div className="space-y-6">
@@ -220,7 +230,9 @@ export default function AppointmentStatusPage() {
                 </div>
             )}
             {!isYourTurn && (appointment.status === 'upcoming' || appointment.status === 'active' || appointment.status === 'delayed') && (
-              <p className="text-center text-lg font-medium text-foreground/80 flex items-center justify-center"><Clock className="mr-2 h-5 w-5 text-primary"/> {displayEstimatedWaitTime}</p>
+              <div className="py-4">
+                {getQueueMessage()}
+              </div>
             )}
              {appointment.status === 'completed' && (
                 <div className="p-4 bg-green-100 border border-green-300 rounded-md text-center">
@@ -258,4 +270,3 @@ export default function AppointmentStatusPage() {
     </div>
   );
 }
-
