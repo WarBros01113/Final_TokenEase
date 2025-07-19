@@ -140,15 +140,20 @@ export default function AppointmentsPage() {
           const dateString = selectedDate.toISOString().split('T')[0];
 
           const slotConfigsRef = collection(db, "slotConfigurations");
-          // Query for slot configurations for the selected doctor that include the selected day of the week
+          // Fetch all slot configs for the doctor, then filter by day on the client
           const qConfigs = firestoreQuery(
             slotConfigsRef,
-            where("doctorId", "==", selectedDoctorId),
-            where("dayOfWeek", "array-contains", dayOfWeek) // Use array-contains for multi-day configs
+            where("doctorId", "==", selectedDoctorId)
           );
-          const configSnapshot = await getDocs(qConfigs);
+          const allConfigsSnapshot = await getDocs(qConfigs);
 
-          if (configSnapshot.empty) {
+          // Client-side filter
+          const configDocsForDay = allConfigsSnapshot.docs.filter(doc => {
+              const data = doc.data();
+              return Array.isArray(data.dayOfWeek) && data.dayOfWeek.includes(dayOfWeek);
+          });
+          
+          if (configDocsForDay.length === 0) {
             setAvailableSlots([]);
             setIsLoadingSlots(false);
             return;
@@ -156,7 +161,7 @@ export default function AppointmentsPage() {
 
           const generatedSlots: TimeSlot[] = [];
 
-          for (const confDoc of configSnapshot.docs) {
+          for (const confDoc of configDocsForDay) {
             const configData = confDoc.data() as { selectedSlots: string[], capacityPerSlot: number };
             if (configData.selectedSlots && Array.isArray(configData.selectedSlots)) {
               configData.selectedSlots.forEach(slotTime => { // slotTime is "HH:MM"
@@ -202,13 +207,7 @@ export default function AppointmentsPage() {
           setAvailableSlots(generatedSlots.sort((a,b) => a.startTime.localeCompare(b.startTime)));
         } catch (error: any) {
           console.error("Error generating/fetching slots:", error);
-          if (error.code === 'failed-precondition') {
-            console.error("Firebase error code:", error.code, " - This usually means a composite index is required.");
-            console.warn("Please create a composite index in Firestore for the 'slotConfigurations' collection with fields: 'doctorId' (Ascending) and 'dayOfWeek' (Array).");
-            toast({ variant: "destructive", title: "Configuration Error", description: "A required database index is missing. Please contact support or check the console.", duration: 10000 });
-          } else {
-             toast({ variant: "destructive", title: "Slot Loading Error", description: `Could not load available slots. ${error.message || 'Please try again.'}` });
-          }
+          toast({ variant: "destructive", title: "Slot Loading Error", description: `Could not load available slots. ${error.message || 'Please try again.'}` });
         } finally {
           setIsLoadingSlots(false);
         }
@@ -494,3 +493,5 @@ export default function AppointmentsPage() {
     </div>
   );
 }
+
+    
