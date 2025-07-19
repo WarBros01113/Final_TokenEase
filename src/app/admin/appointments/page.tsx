@@ -72,8 +72,8 @@ export default function ManageAppointmentsPage() {
       
       const missedApptsQuery = firestoreQuery(
         collection(db, "appointments"),
-        where("date", "<", todayStr),
-        where("status", "in", ["upcoming", "active", "delayed"])
+        where("status", "in", ["upcoming", "active", "delayed"]),
+        where("date", "<", todayStr)
       );
 
       const snapshot = await getDocs(missedApptsQuery);
@@ -87,11 +87,15 @@ export default function ManageAppointmentsPage() {
         return true; 
       }
       return false;
-    } catch (e) {
+    } catch (e: any) {
       console.error("Error updating missed appointments on admin page: ", e);
+      if (e.code === 'failed-precondition') {
+          console.error("Firestore index missing for updating missed appointments. Please create a composite index on the 'appointments' collection with fields: 'status' (Ascending) and 'date' (Ascending).");
+          toast({variant: "destructive", title: "Index Required", description: "A Firestore index is needed to perform this operation. Check the console for details.", duration: 10000})
+      }
       return false;
     }
-  }, []);
+  }, [toast]);
 
   const fetchAppointments = useCallback(async () => {
     setIsLoading(true);
